@@ -24,8 +24,8 @@ let teachers = [
 ];
 
 let students = [
-    { student_id: 'S11111111', name: 'John Doe', email: 'john.doe@school.com', class_section: 'CS-A', phone: '1111111111', password_hash: '1ba3d16e9881959f8c9a9762854f72c6e6321cdd44358a10a4e939033117eab9' },
-    { student_id: 'S22222222', name: 'Jane Smith', email: 'jane.smith@school.com', class_section: 'CS-A', phone: '2222222222', password_hash: '1ba3d16e9881959f8c9a9762854f72c6e6321cdd44358a10a4e939033117eab9' }
+    { student_id: 'S11111111', name: 'John Doe', email: 'john.doe@school.com', class_section: 'CS-A', phone: '1111111111', password_hash: '703b0a3d6ad75b649a28adde7d83c6251da457549263bc7ff45ec709b0a8448b' },
+    { student_id: 'S22222222', name: 'Jane Smith', email: 'jane.smith@school.com', class_section: 'CS-A', phone: '2222222222', password_hash: '703b0a3d6ad75b649a28adde7d83c6251da457549263bc7ff45ec709b0a8448b' }
 ];
 
 let timetable = [
@@ -64,35 +64,35 @@ const hashPassword = (password) => {
 // Student login
 app.post('/auth/student/login', (req, res) => {
     const { studentId, password } = req.body;
-    
+
     if (!studentId || !password) {
         return res.status(400).json({
             success: false,
             message: 'Student ID and password are required'
         });
     }
-    
+
     const hashedPassword = hashPassword(password);
     const student = students.find(s => s.student_id === studentId && s.password_hash === hashedPassword);
-    
+
     if (!student) {
         return res.status(401).json({
             success: false,
             message: 'Invalid student ID or password'
         });
     }
-    
+
     const token = jwt.sign(
-        { 
-            id: student.student_id, 
-            name: student.name, 
+        {
+            id: student.student_id,
+            name: student.name,
             class: student.class_section,
-            type: 'student' 
+            type: 'student'
         },
         JWT_SECRET,
         { expiresIn: '24h' }
     );
-    
+
     res.json({
         success: true,
         message: 'Login successful',
@@ -109,35 +109,35 @@ app.post('/auth/student/login', (req, res) => {
 // Teacher login
 app.post('/auth/teacher/login', (req, res) => {
     const { teacherId, password } = req.body;
-    
+
     if (!teacherId || !password) {
         return res.status(400).json({
             success: false,
             message: 'Teacher ID and password are required'
         });
     }
-    
+
     const hashedPassword = hashPassword(password);
     const teacher = teachers.find(t => t.teacher_id === teacherId && t.password_hash === hashedPassword);
-    
+
     if (!teacher) {
         return res.status(401).json({
             success: false,
             message: 'Invalid teacher ID or password'
         });
     }
-    
+
     const token = jwt.sign(
-        { 
-            id: teacher.teacher_id, 
-            name: teacher.name, 
+        {
+            id: teacher.teacher_id,
+            name: teacher.name,
             department: teacher.department,
-            type: 'teacher' 
+            type: 'teacher'
         },
         JWT_SECRET,
         { expiresIn: '24h' }
     );
-    
+
     res.json({
         success: true,
         message: 'Login successful',
@@ -154,20 +154,20 @@ app.post('/auth/teacher/login', (req, res) => {
 // WIFI VALIDATION ENDPOINT
 app.post('/validate-wifi', authenticateToken, (req, res) => {
     const { bssid } = req.body;
-    
+
     console.log(`📶 BSSID validation request from ${req.user.type}: ${req.user.name} (${req.user.id})`);
     console.log(`📍 BSSID: ${bssid}`);
-    
+
     if (!bssid) {
         return res.status(400).json({
             success: false,
             message: 'BSSID is required'
         });
     }
-    
+
     // Check if BSSID exists in rooms
     const room = rooms.find(r => r.bssid.toLowerCase() === bssid.toLowerCase());
-    
+
     if (!room) {
         console.log(`❌ BSSID ${bssid} is NOT AUTHORIZED`);
         return res.json({
@@ -176,22 +176,22 @@ app.post('/validate-wifi', authenticateToken, (req, res) => {
             bssid: bssid
         });
     }
-    
+
     console.log(`✅ BSSID ${bssid} is AUTHORIZED - Room: ${room.room_number}`);
-    
+
     // Get current class info if available
     const currentTime = new Date().toTimeString().slice(0, 5); // HH:MM format
     const currentDay = new Date().toLocaleDateString('en-US', { weekday: 'long' });
-    
+
     const currentClass = timetable.find(t => {
         const teacher = teachers.find(te => te.teacher_id === t.teacher_id);
-        return t.room_id === room.id && 
-               t.day_of_week === currentDay && 
-               t.start_time <= currentTime && 
-               t.end_time >= currentTime &&
-               (req.user.type === 'teacher' ? t.teacher_id === req.user.id : t.class_section === req.user.class);
+        return t.room_id === room.id &&
+            t.day_of_week === currentDay &&
+            t.start_time <= currentTime &&
+            t.end_time >= currentTime &&
+            (req.user.type === 'teacher' ? t.teacher_id === req.user.id : t.class_section === req.user.class);
     });
-    
+
     let classInfo = null;
     if (currentClass) {
         const teacher = teachers.find(t => t.teacher_id === currentClass.teacher_id);
@@ -202,7 +202,7 @@ app.post('/validate-wifi', authenticateToken, (req, res) => {
             end_time: currentClass.end_time
         };
     }
-    
+
     res.json({
         success: true,
         message: 'WiFi network is authorized for attendance',
@@ -221,30 +221,30 @@ app.post('/validate-wifi', authenticateToken, (req, res) => {
 // Mark attendance
 app.post('/attendance/mark', authenticateToken, (req, res) => {
     const { roomId, subject, teacherId } = req.body;
-    
+
     if (req.user.type !== 'student') {
         return res.status(403).json({
             success: false,
             message: 'Only students can mark attendance'
         });
     }
-    
+
     if (!roomId) {
         return res.status(400).json({
             success: false,
             message: 'Room ID is required'
         });
     }
-    
+
     // Check if attendance already marked for today
     const today = new Date().toISOString().split('T')[0];
-    const existingRecord = attendance.find(a => 
-        a.student_id === req.user.id && 
-        a.room_id === roomId && 
+    const existingRecord = attendance.find(a =>
+        a.student_id === req.user.id &&
+        a.room_id === roomId &&
         a.timestamp.startsWith(today) &&
         (!subject || a.subject === subject)
     );
-    
+
     if (existingRecord) {
         return res.json({
             success: false,
@@ -252,7 +252,7 @@ app.post('/attendance/mark', authenticateToken, (req, res) => {
             attendance: existingRecord
         });
     }
-    
+
     // Mark new attendance
     const newAttendance = {
         id: attendance.length + 1,
@@ -264,11 +264,11 @@ app.post('/attendance/mark', authenticateToken, (req, res) => {
         timestamp: new Date().toISOString(),
         status: 'present'
     };
-    
+
     attendance.push(newAttendance);
-    
+
     console.log(`✅ Attendance marked for ${req.user.name} (${req.user.id}) in room ${roomId}`);
-    
+
     res.json({
         success: true,
         message: 'Attendance marked successfully',
@@ -280,9 +280,9 @@ app.post('/attendance/mark', authenticateToken, (req, res) => {
 // Get attendance history
 app.get('/attendance/history', authenticateToken, (req, res) => {
     const { limit = 50, offset = 0 } = req.query;
-    
+
     let userAttendance;
-    
+
     if (req.user.type === 'student') {
         userAttendance = attendance.filter(a => a.student_id === req.user.id);
     } else if (req.user.type === 'teacher') {
@@ -293,13 +293,13 @@ app.get('/attendance/history', authenticateToken, (req, res) => {
             message: 'Unauthorized access'
         });
     }
-    
+
     // Add additional info
     const enrichedAttendance = userAttendance.map(record => {
         const room = rooms.find(r => r.id === record.room_id);
         const student = students.find(s => s.student_id === record.student_id);
         const teacher = teachers.find(t => t.teacher_id === record.teacher_id);
-        
+
         return {
             ...record,
             room_number: room ? room.room_number : 'Unknown',
@@ -308,11 +308,11 @@ app.get('/attendance/history', authenticateToken, (req, res) => {
             teacher_name: teacher ? teacher.name : 'Unknown'
         };
     });
-    
+
     // Apply pagination
     const paginatedResults = enrichedAttendance
         .slice(parseInt(offset), parseInt(offset) + parseInt(limit));
-    
+
     res.json({
         success: true,
         attendance: paginatedResults,
@@ -326,7 +326,7 @@ app.get('/attendance/history', authenticateToken, (req, res) => {
 // Get timetable
 app.get('/timetable', authenticateToken, (req, res) => {
     let userTimetable;
-    
+
     if (req.user.type === 'student') {
         userTimetable = timetable.filter(t => t.class_section === req.user.class);
     } else if (req.user.type === 'teacher') {
@@ -337,12 +337,12 @@ app.get('/timetable', authenticateToken, (req, res) => {
             message: 'Unauthorized access'
         });
     }
-    
+
     // Add additional info
     const enrichedTimetable = userTimetable.map(entry => {
         const teacher = teachers.find(t => t.teacher_id === entry.teacher_id);
         const room = rooms.find(r => r.id === entry.room_id);
-        
+
         return {
             ...entry,
             teacher_name: teacher ? teacher.name : 'Unknown',
@@ -350,7 +350,7 @@ app.get('/timetable', authenticateToken, (req, res) => {
             building: room ? room.building : 'Unknown'
         };
     });
-    
+
     // Sort by day and time
     const dayOrder = { 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3, 'Thursday': 4, 'Friday': 5, 'Saturday': 6, 'Sunday': 7 };
     enrichedTimetable.sort((a, b) => {
@@ -359,7 +359,7 @@ app.get('/timetable', authenticateToken, (req, res) => {
         }
         return a.start_time.localeCompare(b.start_time);
     });
-    
+
     res.json({
         success: true,
         timetable: enrichedTimetable
@@ -371,23 +371,23 @@ app.get('/timetable', authenticateToken, (req, res) => {
 // Get user profile
 app.get('/profile', authenticateToken, (req, res) => {
     let user;
-    
+
     if (req.user.type === 'student') {
         user = students.find(s => s.student_id === req.user.id);
     } else if (req.user.type === 'teacher') {
         user = teachers.find(t => t.teacher_id === req.user.id);
     }
-    
+
     if (!user) {
         return res.status(404).json({
             success: false,
             message: 'User not found'
         });
     }
-    
+
     // Remove password hash from response
     const { password_hash, ...userProfile } = user;
-    
+
     res.json({
         success: true,
         profile: userProfile
@@ -400,16 +400,16 @@ app.get('/profile', authenticateToken, (req, res) => {
 app.post('/admin/add-demo-data', (req, res) => {
     // Add more demo students
     const demoStudents = [
-        { student_id: 'S33333333', name: 'Mike Johnson', email: 'mike.johnson@school.com', class_section: 'CS-B', phone: '3333333333', password_hash: '1ba3d16e9881959f8c9a9762854f72c6e6321cdd44358a10a4e939033117eab9' },
-        { student_id: 'S44444444', name: 'Sarah Davis', email: 'sarah.davis@school.com', class_section: 'CS-B', phone: '4444444444', password_hash: '1ba3d16e9881959f8c9a9762854f72c6e6321cdd44358a10a4e939033117eab9' }
+        { student_id: 'S33333333', name: 'Mike Johnson', email: 'mike.johnson@school.com', class_section: 'CS-B', phone: '3333333333', password_hash: '703b0a3d6ad75b649a28adde7d83c6251da457549263bc7ff45ec709b0a8448b' },
+        { student_id: 'S44444444', name: 'Sarah Davis', email: 'sarah.davis@school.com', class_section: 'CS-B', phone: '4444444444', password_hash: '703b0a3d6ad75b649a28adde7d83c6251da457549263bc7ff45ec709b0a8448b' }
     ];
-    
+
     demoStudents.forEach(student => {
         if (!students.find(s => s.student_id === student.student_id)) {
             students.push(student);
         }
     });
-    
+
     res.json({
         success: true,
         message: 'Demo data added successfully',
