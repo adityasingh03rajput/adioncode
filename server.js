@@ -34,6 +34,7 @@ let timetable = [
 ];
 
 let attendance = [];
+let activeSessions = []; // Track active user sessions with device info
 
 // Authentication middleware
 const authenticateToken = (req, res, next) => {
@@ -63,7 +64,7 @@ const hashPassword = (password) => {
 
 // Student login
 app.post('/auth/student/login', (req, res) => {
-    const { studentId, password } = req.body;
+    const { studentId, password, deviceId } = req.body;
 
     if (!studentId || !password) {
         return res.status(400).json({
@@ -82,16 +83,52 @@ app.post('/auth/student/login', (req, res) => {
         });
     }
 
+    // Check for existing sessions
+    const existingSession = activeSessions.find(s => s.userId === studentId);
+    const deviceSession = activeSessions.find(s => s.deviceId === deviceId && s.userId !== studentId);
+
+    if (existingSession && existingSession.deviceId !== deviceId) {
+        return res.status(409).json({
+            success: false,
+            message: 'Account is already logged in on another device'
+        });
+    }
+
+    if (deviceSession) {
+        return res.status(409).json({
+            success: false,
+            message: 'Another account is already logged in on this device'
+        });
+    }
+
     const token = jwt.sign(
         {
             id: student.student_id,
             name: student.name,
             class: student.class_section,
-            type: 'student'
+            type: 'student',
+            deviceId: deviceId
         },
         JWT_SECRET,
         { expiresIn: '24h' }
     );
+
+    // Update or create session
+    const sessionIndex = activeSessions.findIndex(s => s.userId === studentId);
+    const sessionData = {
+        userId: studentId,
+        deviceId: deviceId || 'unknown',
+        loginTime: new Date().toISOString(),
+        lastActivity: new Date().toISOString()
+    };
+
+    if (sessionIndex >= 0) {
+        activeSessions[sessionIndex] = sessionData;
+    } else {
+        activeSessions.push(sessionData);
+    }
+
+    console.log(`🔐 Student login: ${student.name} (${studentId}) on device ${deviceId}`);
 
     res.json({
         success: true,
@@ -108,7 +145,7 @@ app.post('/auth/student/login', (req, res) => {
 
 // Teacher login
 app.post('/auth/teacher/login', (req, res) => {
-    const { teacherId, password } = req.body;
+    const { teacherId, password, deviceId } = req.body;
 
     if (!teacherId || !password) {
         return res.status(400).json({
@@ -127,16 +164,52 @@ app.post('/auth/teacher/login', (req, res) => {
         });
     }
 
+    // Check for existing sessions
+    const existingSession = activeSessions.find(s => s.userId === teacherId);
+    const deviceSession = activeSessions.find(s => s.deviceId === deviceId && s.userId !== teacherId);
+
+    if (existingSession && existingSession.deviceId !== deviceId) {
+        return res.status(409).json({
+            success: false,
+            message: 'Account is already logged in on another device'
+        });
+    }
+
+    if (deviceSession) {
+        return res.status(409).json({
+            success: false,
+            message: 'Another account is already logged in on this device'
+        });
+    }
+
     const token = jwt.sign(
         {
             id: teacher.teacher_id,
             name: teacher.name,
             department: teacher.department,
-            type: 'teacher'
+            type: 'teacher',
+            deviceId: deviceId
         },
         JWT_SECRET,
         { expiresIn: '24h' }
     );
+
+    // Update or create session
+    const sessionIndex = activeSessions.findIndex(s => s.userId === teacherId);
+    const sessionData = {
+        userId: teacherId,
+        deviceId: deviceId || 'unknown',
+        loginTime: new Date().toISOString(),
+        lastActivity: new Date().toISOString()
+    };
+
+    if (sessionIndex >= 0) {
+        activeSessions[sessionIndex] = sessionData;
+    } else {
+        activeSessions.push(sessionData);
+    }
+
+    console.log(`🔐 Teacher login: ${teacher.name} (${teacherId}) on device ${deviceId}`);
 
     res.json({
         success: true,
@@ -148,6 +221,24 @@ app.post('/auth/teacher/login', (req, res) => {
             email: teacher.email,
             department: teacher.department
         }
+    });
+});
+
+// Logout endpoint
+app.post('/auth/logout', authenticateToken, (req, res) => {
+    const userId = req.user.id;
+    const deviceId = req.user.deviceId;
+
+    // Remove session
+    const sessionIndex = activeSessions.findIndex(s => s.userId === userId && s.deviceId === deviceId);
+    if (sessionIndex >= 0) {
+        activeSessions.splice(sessionIndex, 1);
+        console.log(`🔓 User logout: ${userId} from device ${deviceId}`);
+    }
+
+    res.json({
+        success: true,
+        message: 'Logged out successfully'
     });
 });
 
@@ -394,7 +485,102 @@ app.get('/profile', authenticateToken, (req, res) => {
     });
 });
 
-// ADMIN ENDPOINTS (for testing)
+// ADMIN ENDPOINTS
+
+// Sync endpoints for admin panel
+app.post('/admin/sync/room', (req, res) => {
+    const { id, room_number, bssid, building, capacity } = req.body;
+    
+    // Find existing room or create new
+    const existingIndex = rooms.findIndex(r => r.id === id || r.room_number === room_number);
+    const roomData = {
+        id: id || rooms.length + 1,
+        room_number,
+        bssid: bssid.toLowerCase(),
+        building,
+        capacity: capacity || 50
+    };
+    
+    if (existingIndex >= 0) {
+        rooms[existingIndex] = roomData;
+    } else {
+        rooms.push(roomData);
+    }
+    
+    console.log(`📍 Room synced: ${room_number} (${bssid})`);
+    res.json({ success: true, message: 'Room synced successfully' });
+});
+
+app.post('/admin/sync/teacher', (req, res) => {
+    const { teacher_id, name, email, department, phone, password_hash } = req.body;
+    
+    const existingIndex = teachers.findIndex(t => t.teacher_id === teacher_id);
+    const teacherData = {
+        teacher_id,
+        name,
+        email,
+        department,
+        phone,
+        password_hash
+    };
+    
+    if (existingIndex >= 0) {
+        teachers[existingIndex] = teacherData;
+    } else {
+        teachers.push(teacherData);
+    }
+    
+    console.log(`👨‍🏫 Teacher synced: ${name} (${teacher_id})`);
+    res.json({ success: true, message: 'Teacher synced successfully' });
+});
+
+app.post('/admin/sync/student', (req, res) => {
+    const { student_id, name, email, class_section, phone, password_hash } = req.body;
+    
+    const existingIndex = students.findIndex(s => s.student_id === student_id);
+    const studentData = {
+        student_id,
+        name,
+        email,
+        class_section,
+        phone,
+        password_hash
+    };
+    
+    if (existingIndex >= 0) {
+        students[existingIndex] = studentData;
+    } else {
+        students.push(studentData);
+    }
+    
+    console.log(`👨‍🎓 Student synced: ${name} (${student_id})`);
+    res.json({ success: true, message: 'Student synced successfully' });
+});
+
+app.post('/admin/sync/timetable', (req, res) => {
+    const { id, class_section, day_of_week, start_time, end_time, subject, teacher_id, room_id } = req.body;
+    
+    const existingIndex = timetable.findIndex(t => t.id === id);
+    const timetableData = {
+        id: id || timetable.length + 1,
+        class_section,
+        day_of_week,
+        start_time,
+        end_time,
+        subject,
+        teacher_id,
+        room_id
+    };
+    
+    if (existingIndex >= 0) {
+        timetable[existingIndex] = timetableData;
+    } else {
+        timetable.push(timetableData);
+    }
+    
+    console.log(`📅 Timetable synced: ${subject} - ${class_section} (${day_of_week})`);
+    res.json({ success: true, message: 'Timetable synced successfully' });
+});
 
 // Add demo data
 app.post('/admin/add-demo-data', (req, res) => {
