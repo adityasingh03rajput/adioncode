@@ -4,9 +4,34 @@ const jwt = require('jsonwebtoken');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Enhanced CORS configuration for production
+const corsOptions = {
+    origin: process.env.NODE_ENV === 'production' 
+        ? ['https://your-admin-domain.com', 'https://letsbunk-admin.netlify.app'] 
+        : true,
+    credentials: true,
+    optionsSuccessStatus: 200
+};
+
 // Middleware
-app.use(cors());
-app.use(express.json());
+app.use(cors(corsOptions));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Request logging middleware
+app.use((req, res, next) => {
+    const timestamp = new Date().toISOString();
+    console.log(`${timestamp} - ${req.method} ${req.path} - IP: ${req.ip}`);
+    next();
+});
+
+// Security headers
+app.use((req, res, next) => {
+    res.header('X-Content-Type-Options', 'nosniff');
+    res.header('X-Frame-Options', 'DENY');
+    res.header('X-XSS-Protection', '1; mode=block');
+    next();
+});
 
 // JWT Secret (use environment variable in production)
 const JWT_SECRET = process.env.JWT_SECRET || 'letsbunk_secret_key_2024';
@@ -724,31 +749,201 @@ app.post('/admin/add-demo-data', (req, res) => {
     });
 });
 
-// Health check endpoint (Enhanced)
-app.get('/health', (req, res) => {
+// ADMIN MANAGEMENT ENDPOINTS
+
+// Get all data for admin dashboard
+app.get('/admin/dashboard', (req, res) => {
+    const stats = {
+        rooms: rooms.length,
+        students: students.length,
+        teachers: teachers.length,
+        timetable: timetable.length,
+        attendance: attendance.length,
+        activeSessions: activeSessions.length,
+        recentAttendance: attendance.slice(-10).map(a => ({
+            ...a,
+            student_name: students.find(s => s.student_id === a.student_id)?.name || 'Unknown',
+            room_name: rooms.find(r => r.id === a.room_id)?.room_number || 'Unknown'
+        }))
+    };
+    
     res.json({
-        status: 'Server is running',
+        success: true,
+        stats: stats,
+        uptime: process.uptime(),
+        memory: process.memoryUsage(),
+        timestamp: new Date().toISOString()
+    });
+});
+
+// Clear all data (admin only)
+app.post('/admin/clear-all', (req, res) => {
+    const { confirm } = req.body;
+    
+    if (confirm !== 'CLEAR_ALL_DATA') {
+        return res.status(400).json({
+            success: false,
+            message: 'Confirmation required. Send {"confirm": "CLEAR_ALL_DATA"}'
+        });
+    }
+    
+    // Keep demo data but clear user-added data
+    rooms = [
+        { id: 1, room_number: 'CS-101', bssid: '6a:5e:31:58:9b:61', building: 'Computer Science Block', capacity: 50 },
+        { id: 2, room_number: 'CS-102', bssid: '2c:4f:22:67:8a:45', building: 'Computer Science Block', capacity: 40 },
+        { id: 3, room_number: 'MATH-201', bssid: '8e:3d:11:89:5c:23', building: 'Mathematics Block', capacity: 60 }
+    ];
+    
+    teachers = [
+        { teacher_id: 'T12345678', name: 'Dr. Alice Brown', email: 'alice.brown@school.com', department: 'Computer Science', phone: '1234567890', password_hash: 'ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f' },
+        { teacher_id: 'T87654321', name: 'Prof. Bob Wilson', email: 'bob.wilson@school.com', department: 'Mathematics', phone: '0987654321', password_hash: 'ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f' }
+    ];
+    
+    students = [
+        { student_id: 'S11111111', name: 'John Doe', email: 'john.doe@school.com', class_section: 'CS-A', phone: '1111111111', password_hash: '703b0a3d6ad75b649a28adde7d83c6251da457549263bc7ff45ec709b0a8448b' },
+        { student_id: 'S22222222', name: 'Jane Smith', email: 'jane.smith@school.com', class_section: 'CS-A', phone: '2222222222', password_hash: '703b0a3d6ad75b649a28adde7d83c6251da457549263bc7ff45ec709b0a8448b' }
+    ];
+    
+    timetable = [
+        { id: 1, class_section: 'CS-A', day_of_week: 'Monday', start_time: '09:00', end_time: '10:30', subject: 'Data Structures', teacher_id: 'T12345678', room_id: 1 },
+        { id: 2, class_section: 'CS-A', day_of_week: 'Monday', start_time: '11:00', end_time: '12:30', subject: 'Mathematics', teacher_id: 'T87654321', room_id: 3 }
+    ];
+    
+    attendance = [];
+    activeSessions = [];
+    
+    console.log('🧹 All data cleared, reset to demo state');
+    
+    res.json({
+        success: true,
+        message: 'All data cleared successfully',
+        timestamp: new Date().toISOString()
+    });
+});
+
+// Get active sessions
+app.get('/admin/sessions', (req, res) => {
+    const sessionsWithDetails = activeSessions.map(session => {
+        const user = students.find(s => s.student_id === session.userId) || 
+                    teachers.find(t => t.teacher_id === session.userId);
+        
+        return {
+            ...session,
+            userName: user?.name || 'Unknown',
+            userType: students.find(s => s.student_id === session.userId) ? 'student' : 'teacher'
+        };
+    });
+    
+    res.json({
+        success: true,
+        sessions: sessionsWithDetails,
+        count: activeSessions.length
+    });
+});
+
+// Clear specific session
+app.post('/admin/clear-session', (req, res) => {
+    const { userId, deviceId } = req.body;
+    
+    const sessionIndex = activeSessions.findIndex(s => 
+        s.userId === userId && (!deviceId || s.deviceId === deviceId)
+    );
+    
+    if (sessionIndex >= 0) {
+        const removedSession = activeSessions.splice(sessionIndex, 1)[0];
+        console.log(`🔓 Admin cleared session: ${removedSession.userId} from ${removedSession.deviceId}`);
+        
+        res.json({
+            success: true,
+            message: 'Session cleared successfully'
+        });
+    } else {
+        res.status(404).json({
+            success: false,
+            message: 'Session not found'
+        });
+    }
+});
+
+// Enhanced health check endpoint
+app.get('/health', (req, res) => {
+    const uptime = process.uptime();
+    const memory = process.memoryUsage();
+    
+    res.json({
+        status: '🚀 Server is running perfectly',
+        version: '2.0.0',
         timestamp: new Date().toISOString(),
+        uptime: {
+            seconds: Math.floor(uptime),
+            formatted: `${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m ${Math.floor(uptime % 60)}s`
+        },
+        memory: {
+            used: `${Math.round(memory.heapUsed / 1024 / 1024)}MB`,
+            total: `${Math.round(memory.heapTotal / 1024 / 1024)}MB`,
+            external: `${Math.round(memory.external / 1024 / 1024)}MB`
+        },
         database: {
-            connected: true,
+            status: '✅ Connected (In-Memory)',
             rooms: rooms.length,
             students: students.length,
             teachers: teachers.length,
-            attendance: attendance.length
+            timetable: timetable.length,
+            attendance: attendance.length,
+            activeSessions: activeSessions.length
         },
         endpoints: {
-            auth: '/auth/student/login, /auth/teacher/login',
-            wifi: '/validate-wifi',
-            attendance: '/attendance/mark, /attendance/history',
-            timetable: '/timetable',
-            profile: '/profile',
-            admin: '/admin/sessions, /admin/clear-sessions',
-            sync: '/admin/sync/rooms, /admin/sync/teachers, /admin/sync/students, /admin/sync/timetable'
+            authentication: [
+                'POST /auth/student/login',
+                'POST /auth/teacher/login',
+                'POST /auth/logout'
+            ],
+            wifi: [
+                'POST /validate-wifi'
+            ],
+            attendance: [
+                'POST /attendance/mark',
+                'GET /attendance/history'
+            ],
+            profile: [
+                'GET /profile',
+                'GET /timetable'
+            ],
+            admin: [
+                'GET /admin/dashboard',
+                'GET /admin/sessions',
+                'POST /admin/clear-session',
+                'POST /admin/clear-all'
+            ],
+            sync: [
+                'POST /admin/sync/rooms',
+                'POST /admin/sync/teachers', 
+                'POST /admin/sync/students',
+                'POST /admin/sync/timetable'
+            ]
         },
         demo_credentials: {
-            student: { id: 'S11111111', password: 'student123' },
-            teacher: { id: 'T12345678', password: 'teacher123' }
-        }
+            student: { 
+                id: 'S11111111', 
+                password: 'student123',
+                note: 'Use these credentials to test the mobile app'
+            },
+            teacher: { 
+                id: 'T12345678', 
+                password: 'teacher123',
+                note: 'Use these credentials to test teacher features'
+            }
+        },
+        features: [
+            '🔐 JWT Authentication',
+            '📱 Mobile App Support',
+            '📍 WiFi-based Attendance',
+            '👥 Session Management',
+            '📊 Admin Dashboard',
+            '🔄 Real-time Sync',
+            '📋 Bulk Data Import',
+            '🛡️ Security Headers'
+        ]
     });
 });
 
@@ -761,13 +956,45 @@ app.use((err, req, res, next) => {
     });
 });
 
+// 404 handler for undefined routes
+app.use('*', (req, res) => {
+    res.status(404).json({
+        success: false,
+        message: 'Endpoint not found',
+        availableEndpoints: [
+            'GET /health - Server status',
+            'POST /auth/student/login - Student authentication',
+            'POST /auth/teacher/login - Teacher authentication',
+            'POST /validate-wifi - WiFi validation',
+            'POST /attendance/mark - Mark attendance',
+            'GET /admin/dashboard - Admin dashboard'
+        ]
+    });
+});
+
 // Start server
-app.listen(PORT, () => {
-    console.log(`🚀 Let's Bunk Server running on port ${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+    console.log('\n🎉 LetsBunk Server v2.0 Started Successfully!');
+    console.log('=' * 50);
+    console.log(`🚀 Server running on port: ${PORT}`);
+    console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(`🔗 Health check: http://localhost:${PORT}/health`);
-    console.log(`🔐 Authentication endpoints available`);
-    console.log(`📱 Ready for APK connections`);
-    console.log(`💾 Using in-memory storage (demo mode)`);
-    console.log(`👨‍🎓 Demo Student: S11111111 / student123`);
-    console.log(`👨‍🏫 Demo Teacher: T12345678 / teacher123`);
+    console.log(`📊 Admin dashboard: http://localhost:${PORT}/admin/dashboard`);
+    console.log('\n📱 Mobile App Endpoints:');
+    console.log('  • POST /auth/student/login - Student login');
+    console.log('  • POST /auth/teacher/login - Teacher login');
+    console.log('  • POST /validate-wifi - WiFi validation');
+    console.log('  • POST /attendance/mark - Mark attendance');
+    console.log('\n🖥️  Admin Panel Endpoints:');
+    console.log('  • POST /admin/sync/rooms - Sync rooms');
+    console.log('  • POST /admin/sync/students - Sync students');
+    console.log('  • POST /admin/sync/teachers - Sync teachers');
+    console.log('  • GET /admin/sessions - View active sessions');
+    console.log('\n🔐 Demo Credentials:');
+    console.log('  👨‍🎓 Student: S11111111 / student123');
+    console.log('  👨‍🏫 Teacher: T12345678 / teacher123');
+    console.log('\n💾 Database: In-Memory (Perfect for Render)');
+    console.log(`📊 Initial Data: ${rooms.length} rooms, ${students.length} students, ${teachers.length} teachers`);
+    console.log('\n✅ Server ready for connections!');
+    console.log('=' * 50);
 });
