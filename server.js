@@ -1,40 +1,26 @@
 const express = require('express');
 const cors = require('cors');
+const sqlite3 = require('sqlite3').verbose();
+const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = 3000;
 
 // Middleware
 app.use(cors());
 app.use(express.json());
 
-// JWT Secret (use environment variable in production)
-const JWT_SECRET = process.env.JWT_SECRET || 'letsbunk_secret_key_2024';
+// JWT Secret (in production, use environment variable)
+const JWT_SECRET = 'letsbunk_secret_key_2024';
 
-// In-memory storage for demo (replace with proper database in production)
-let rooms = [
-    { id: 1, room_number: 'CS-101', bssid: '6a:5e:31:58:9b:61', building: 'Computer Science Block', capacity: 50 },
-    { id: 2, room_number: 'CS-102', bssid: '2c:4f:22:67:8a:45', building: 'Computer Science Block', capacity: 40 },
-    { id: 3, room_number: 'MATH-201', bssid: '8e:3d:11:89:5c:23', building: 'Mathematics Block', capacity: 60 }
-];
-
-let teachers = [
-    { teacher_id: 'T12345678', name: 'Dr. Alice Brown', email: 'alice.brown@school.com', department: 'Computer Science', phone: '1234567890', password_hash: 'ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f' },
-    { teacher_id: 'T87654321', name: 'Prof. Bob Wilson', email: 'bob.wilson@school.com', department: 'Mathematics', phone: '0987654321', password_hash: 'ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f' }
-];
-
-let students = [
-    { student_id: 'S11111111', name: 'John Doe', email: 'john.doe@school.com', class_section: 'CS-A', phone: '1111111111', password_hash: '703b0a3d6ad75b649a28adde7d83c6251da457549263bc7ff45ec709b0a8448b' },
-    { student_id: 'S22222222', name: 'Jane Smith', email: 'jane.smith@school.com', class_section: 'CS-A', phone: '2222222222', password_hash: '703b0a3d6ad75b649a28adde7d83c6251da457549263bc7ff45ec709b0a8448b' }
-];
-
-let timetable = [
-    { id: 1, class_section: 'CS-A', day_of_week: 'Monday', start_time: '09:00', end_time: '10:30', subject: 'Data Structures', teacher_id: 'T12345678', room_id: 1 },
-    { id: 2, class_section: 'CS-A', day_of_week: 'Monday', start_time: '11:00', end_time: '12:30', subject: 'Mathematics', teacher_id: 'T87654321', room_id: 3 }
-];
-
-let attendance = [];
-let activeSessions = []; // Track active user sessions with device info
+// Database connection
+const db = new sqlite3.Database('./letsbunk_admin.db', (err) => {
+    if (err) {
+        console.error('Error connecting to database:', err.message);
+    } else {
+        console.log('📊 Connected to SQLite database');
+    }
+});
 
 // Authentication middleware
 const authenticateToken = (req, res, next) => {
@@ -62,249 +48,458 @@ const hashPassword = (password) => {
 
 // AUTHENTICATION ENDPOINTS
 
+// Active sessions tracking
+const activeSessions = [];
+
 // Student login
 app.post('/auth/student/login', (req, res) => {
     const { studentId, password, deviceId } = req.body;
-
+    
     if (!studentId || !password) {
         return res.status(400).json({
             success: false,
             message: 'Student ID and password are required'
         });
     }
-
+    
     const hashedPassword = hashPassword(password);
-    const student = students.find(s => s.student_id === studentId && s.password_hash === hashedPassword);
-
-    if (!student) {
-        return res.status(401).json({
-            success: false,
-            message: 'Invalid student ID or password'
-        });
-    }
-
-    // Check for existing sessions
-    const existingSession = activeSessions.find(s => s.userId === studentId);
-    const deviceSession = activeSessions.find(s => s.deviceId === deviceId && s.userId !== studentId);
-
-    if (existingSession && existingSession.deviceId !== deviceId) {
-        return res.status(409).json({
-            success: false,
-            message: 'Account is already logged in on another device'
-        });
-    }
-
-    if (deviceSession) {
-        return res.status(409).json({
-            success: false,
-            message: 'Another account is already logged in on this device'
-        });
-    }
-
-    const token = jwt.sign(
-        {
-            id: student.student_id,
-            name: student.name,
-            class: student.class_section,
-            type: 'student',
-            deviceId: deviceId
-        },
-        JWT_SECRET,
-        { expiresIn: '24h' }
-    );
-
-    // Update or create session
-    const sessionIndex = activeSessions.findIndex(s => s.userId === studentId);
-    const sessionData = {
-        userId: studentId,
-        deviceId: deviceId || 'unknown',
-        loginTime: new Date().toISOString(),
-        lastActivity: new Date().toISOString()
-    };
-
-    if (sessionIndex >= 0) {
-        activeSessions[sessionIndex] = sessionData;
-    } else {
-        activeSessions.push(sessionData);
-    }
-
-    console.log(`🔐 Student login: ${student.name} (${studentId}) on device ${deviceId}`);
-
-    res.json({
-        success: true,
-        message: 'Login successful',
-        token: token,
-        user: {
-            id: student.student_id,
-            name: student.name,
-            email: student.email,
-            class: student.class_section
+    
+    db.get(
+        'SELECT * FROM students WHERE student_id = ? AND password_hash = ?',
+        [studentId, hashedPassword],
+        (err, row) => {
+            if (err) {
+                console.error('Database error:', err);
+                return res.status(500).json({
+                    success: false,
+                    message: 'Database error'
+                });
+            }
+            
+            if (!row) {
+                return res.status(401).json({
+                    success: false,
+                    message: 'Invalid student ID or password'
+                });
+            }
+            
+            // Check for existing sessions (optional - can be disabled for testing)
+            const existingSession = activeSessions.find(s => s.userId === studentId);
+            const deviceSession = activeSessions.find(s => s.deviceId === deviceId && s.userId !== studentId);
+            
+            // For now, allow multiple sessions (comment out for production)
+            /*
+            if (existingSession && existingSession.deviceId !== deviceId) {
+                return res.status(409).json({
+                    success: false,
+                    message: 'Account is already logged in on another device'
+                });
+            }
+            
+            if (deviceSession) {
+                return res.status(409).json({
+                    success: false,
+                    message: 'Another account is already logged in on this device'
+                });
+            }
+            */
+            
+            const token = jwt.sign(
+                { 
+                    id: row.student_id, 
+                    name: row.name, 
+                    class: row.class_section,
+                    type: 'student',
+                    deviceId: deviceId || 'unknown'
+                },
+                JWT_SECRET,
+                { expiresIn: '24h' }
+            );
+            
+            // Update or create session
+            const sessionIndex = activeSessions.findIndex(s => s.userId === studentId);
+            const sessionData = {
+                userId: studentId,
+                deviceId: deviceId || 'unknown',
+                loginTime: new Date().toISOString(),
+                lastActivity: new Date().toISOString()
+            };
+            
+            if (sessionIndex >= 0) {
+                activeSessions[sessionIndex] = sessionData;
+            } else {
+                activeSessions.push(sessionData);
+            }
+            
+            console.log(`✅ Student login: ${row.name} (${studentId}) on device ${deviceId || 'unknown'}`);
+            
+            res.json({
+                success: true,
+                message: 'Login successful',
+                token: token,
+                user: {
+                    id: row.student_id,
+                    name: row.name,
+                    email: row.email,
+                    class: row.class_section
+                }
+            });
         }
-    });
+    );
 });
 
 // Teacher login
 app.post('/auth/teacher/login', (req, res) => {
     const { teacherId, password, deviceId } = req.body;
-
+    
     if (!teacherId || !password) {
         return res.status(400).json({
             success: false,
             message: 'Teacher ID and password are required'
         });
     }
-
+    
     const hashedPassword = hashPassword(password);
-    const teacher = teachers.find(t => t.teacher_id === teacherId && t.password_hash === hashedPassword);
-
-    if (!teacher) {
-        return res.status(401).json({
-            success: false,
-            message: 'Invalid teacher ID or password'
-        });
-    }
-
-    // Check for existing sessions
-    const existingSession = activeSessions.find(s => s.userId === teacherId);
-    const deviceSession = activeSessions.find(s => s.deviceId === deviceId && s.userId !== teacherId);
-
-    if (existingSession && existingSession.deviceId !== deviceId) {
-        return res.status(409).json({
-            success: false,
-            message: 'Account is already logged in on another device'
-        });
-    }
-
-    if (deviceSession) {
-        return res.status(409).json({
-            success: false,
-            message: 'Another account is already logged in on this device'
-        });
-    }
-
-    const token = jwt.sign(
-        {
-            id: teacher.teacher_id,
-            name: teacher.name,
-            department: teacher.department,
-            type: 'teacher',
-            deviceId: deviceId
-        },
-        JWT_SECRET,
-        { expiresIn: '24h' }
-    );
-
-    // Update or create session
-    const sessionIndex = activeSessions.findIndex(s => s.userId === teacherId);
-    const sessionData = {
-        userId: teacherId,
-        deviceId: deviceId || 'unknown',
-        loginTime: new Date().toISOString(),
-        lastActivity: new Date().toISOString()
-    };
-
-    if (sessionIndex >= 0) {
-        activeSessions[sessionIndex] = sessionData;
-    } else {
-        activeSessions.push(sessionData);
-    }
-
-    console.log(`🔐 Teacher login: ${teacher.name} (${teacherId}) on device ${deviceId}`);
-
-    res.json({
-        success: true,
-        message: 'Login successful',
-        token: token,
-        user: {
-            id: teacher.teacher_id,
-            name: teacher.name,
-            email: teacher.email,
-            department: teacher.department
+    
+    db.get(
+        'SELECT * FROM teachers WHERE teacher_id = ? AND password_hash = ?',
+        [teacherId, hashedPassword],
+        (err, row) => {
+            if (err) {
+                console.error('Database error:', err);
+                return res.status(500).json({
+                    success: false,
+                    message: 'Database error'
+                });
+            }
+            
+            if (!row) {
+                return res.status(401).json({
+                    success: false,
+                    message: 'Invalid teacher ID or password'
+                });
+            }
+            
+            const token = jwt.sign(
+                { 
+                    id: row.teacher_id, 
+                    name: row.name, 
+                    department: row.department,
+                    type: 'teacher',
+                    deviceId: deviceId || 'unknown'
+                },
+                JWT_SECRET,
+                { expiresIn: '24h' }
+            );
+            
+            // Update teacher session
+            const sessionIndex = activeSessions.findIndex(s => s.userId === teacherId);
+            const sessionData = {
+                userId: teacherId,
+                deviceId: deviceId || 'unknown',
+                loginTime: new Date().toISOString(),
+                lastActivity: new Date().toISOString(),
+                userType: 'teacher'
+            };
+            
+            if (sessionIndex >= 0) {
+                activeSessions[sessionIndex] = sessionData;
+            } else {
+                activeSessions.push(sessionData);
+            }
+            
+            console.log(`✅ Teacher login: ${row.name} (${teacherId}) on device ${deviceId || 'unknown'}`);
+            
+            res.json({
+                success: true,
+                message: 'Login successful',
+                token: token,
+                user: {
+                    id: row.teacher_id,
+                    name: row.name,
+                    email: row.email,
+                    department: row.department
+                }
+            });
         }
-    });
+    );
 });
+
+// SESSION MANAGEMENT ENDPOINTS
 
 // Logout endpoint
 app.post('/auth/logout', authenticateToken, (req, res) => {
     const userId = req.user.id;
     const deviceId = req.user.deviceId;
-
+    
     // Remove session
     const sessionIndex = activeSessions.findIndex(s => s.userId === userId && s.deviceId === deviceId);
     if (sessionIndex >= 0) {
         activeSessions.splice(sessionIndex, 1);
-        console.log(`🔓 User logout: ${userId} from device ${deviceId}`);
     }
-
+    
+    console.log(`🚪 User logout: ${userId} from device ${deviceId}`);
+    
     res.json({
         success: true,
         message: 'Logged out successfully'
     });
 });
 
-// WIFI VALIDATION ENDPOINT
+// Get active sessions (admin only)
+app.get('/admin/sessions', (req, res) => {
+    res.json({
+        success: true,
+        sessions: activeSessions,
+        count: activeSessions.length
+    });
+});
+
+// Clear all sessions (admin only)
+app.post('/admin/clear-sessions', (req, res) => {
+    const clearedCount = activeSessions.length;
+    activeSessions.length = 0;
+    
+    res.json({
+        success: true,
+        message: `Cleared ${clearedCount} active sessions`
+    });
+});
+
+// ADMIN DATA SYNC ENDPOINTS
+
+// Sync room data
+app.post('/admin/sync/rooms', (req, res) => {
+    const { rooms } = req.body;
+    
+    if (!rooms || !Array.isArray(rooms)) {
+        return res.status(400).json({
+            success: false,
+            message: 'Rooms array is required'
+        });
+    }
+    
+    console.log(`📊 Syncing ${rooms.length} rooms from admin panel`);
+    
+    // Clear existing rooms and insert new ones
+    db.serialize(() => {
+        db.run('DELETE FROM rooms');
+        
+        const stmt = db.prepare(`
+            INSERT INTO rooms (room_number, bssid, building, capacity)
+            VALUES (?, ?, ?, ?)
+        `);
+        
+        rooms.forEach(room => {
+            stmt.run([room.room_number, room.bssid, room.building, room.capacity]);
+        });
+        
+        stmt.finalize();
+    });
+    
+    res.json({
+        success: true,
+        message: `Synced ${rooms.length} rooms successfully`
+    });
+});
+
+// Sync teacher data
+app.post('/admin/sync/teachers', (req, res) => {
+    const { teachers } = req.body;
+    
+    if (!teachers || !Array.isArray(teachers)) {
+        return res.status(400).json({
+            success: false,
+            message: 'Teachers array is required'
+        });
+    }
+    
+    console.log(`👨‍🏫 Syncing ${teachers.length} teachers from admin panel`);
+    
+    db.serialize(() => {
+        db.run('DELETE FROM teachers');
+        
+        const stmt = db.prepare(`
+            INSERT INTO teachers (teacher_id, name, email, department, phone, password_hash)
+            VALUES (?, ?, ?, ?, ?, ?)
+        `);
+        
+        teachers.forEach(teacher => {
+            stmt.run([
+                teacher.teacher_id, 
+                teacher.name, 
+                teacher.email, 
+                teacher.department, 
+                teacher.phone, 
+                teacher.password_hash
+            ]);
+        });
+        
+        stmt.finalize();
+    });
+    
+    res.json({
+        success: true,
+        message: `Synced ${teachers.length} teachers successfully`
+    });
+});
+
+// Sync student data
+app.post('/admin/sync/students', (req, res) => {
+    const { students } = req.body;
+    
+    if (!students || !Array.isArray(students)) {
+        return res.status(400).json({
+            success: false,
+            message: 'Students array is required'
+        });
+    }
+    
+    console.log(`👨‍🎓 Syncing ${students.length} students from admin panel`);
+    
+    db.serialize(() => {
+        db.run('DELETE FROM students');
+        
+        const stmt = db.prepare(`
+            INSERT INTO students (student_id, name, email, class_section, phone, password_hash)
+            VALUES (?, ?, ?, ?, ?, ?)
+        `);
+        
+        students.forEach(student => {
+            stmt.run([
+                student.student_id,
+                student.name,
+                student.email,
+                student.class_section,
+                student.phone,
+                student.password_hash
+            ]);
+        });
+        
+        stmt.finalize();
+    });
+    
+    res.json({
+        success: true,
+        message: `Synced ${students.length} students successfully`
+    });
+});
+
+// Sync timetable data
+app.post('/admin/sync/timetable', (req, res) => {
+    const { timetable } = req.body;
+    
+    if (!timetable || !Array.isArray(timetable)) {
+        return res.status(400).json({
+            success: false,
+            message: 'Timetable array is required'
+        });
+    }
+    
+    console.log(`📅 Syncing ${timetable.length} timetable entries from admin panel`);
+    
+    db.serialize(() => {
+        db.run('DELETE FROM timetable');
+        
+        const stmt = db.prepare(`
+            INSERT INTO timetable (class_section, day_of_week, start_time, end_time, subject, teacher_id, room_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        `);
+        
+        timetable.forEach(entry => {
+            stmt.run([
+                entry.class_section,
+                entry.day_of_week,
+                entry.start_time,
+                entry.end_time,
+                entry.subject,
+                entry.teacher_id,
+                entry.room_id
+            ]);
+        });
+        
+        stmt.finalize();
+    });
+    
+    res.json({
+        success: true,
+        message: `Synced ${timetable.length} timetable entries successfully`
+    });
+});
+
+// WIFI VALIDATION ENDPOINT (Enhanced)
 app.post('/validate-wifi', authenticateToken, (req, res) => {
     const { bssid } = req.body;
-
+    
     console.log(`📶 BSSID validation request from ${req.user.type}: ${req.user.name} (${req.user.id})`);
     console.log(`📍 BSSID: ${bssid}`);
-
+    
     if (!bssid) {
         return res.status(400).json({
             success: false,
             message: 'BSSID is required'
         });
     }
-
-    // Check if BSSID exists in rooms
-    const room = rooms.find(r => r.bssid.toLowerCase() === bssid.toLowerCase());
-
-    if (!room) {
-        console.log(`❌ BSSID ${bssid} is NOT AUTHORIZED`);
-        return res.json({
-            success: false,
-            message: 'This WiFi network is not authorized for attendance',
-            bssid: bssid
-        });
-    }
-
-    console.log(`✅ BSSID ${bssid} is AUTHORIZED - Room: ${room.room_number}`);
-
-    // Get current class info if available
-    const currentTime = new Date().toTimeString().slice(0, 5); // HH:MM format
-    const currentDay = new Date().toLocaleDateString('en-US', { weekday: 'long' });
-
-    const currentClass = timetable.find(t => {
-        const teacher = teachers.find(te => te.teacher_id === t.teacher_id);
-        return t.room_id === room.id &&
-            t.day_of_week === currentDay &&
-            t.start_time <= currentTime &&
-            t.end_time >= currentTime &&
-            (req.user.type === 'teacher' ? t.teacher_id === req.user.id : t.class_section === req.user.class);
-    });
-
-    let classInfo = null;
-    if (currentClass) {
-        const teacher = teachers.find(t => t.teacher_id === currentClass.teacher_id);
-        classInfo = {
-            subject: currentClass.subject,
-            teacher_name: teacher ? teacher.name : 'Unknown',
-            start_time: currentClass.start_time,
-            end_time: currentClass.end_time
-        };
-    }
-
-    res.json({
-        success: true,
-        message: 'WiFi network is authorized for attendance',
-        room: {
-            id: room.id,
-            number: room.room_number,
-            building: room.building,
-            bssid: room.bssid
-        },
-        currentClass: classInfo
-    });
+    
+    // Check if BSSID exists in rooms table
+    db.get(
+        'SELECT * FROM rooms WHERE bssid = ?',
+        [bssid.toLowerCase()],
+        (err, room) => {
+            if (err) {
+                console.error('Database error:', err);
+                return res.status(500).json({
+                    success: false,
+                    message: 'Database error'
+                });
+            }
+            
+            if (!room) {
+                console.log(`❌ BSSID ${bssid} is NOT AUTHORIZED`);
+                return res.json({
+                    success: false,
+                    message: 'This WiFi network is not authorized for attendance',
+                    bssid: bssid
+                });
+            }
+            
+            console.log(`✅ BSSID ${bssid} is AUTHORIZED - Room: ${room.room_number}`);
+            
+            // Get current class info if available
+            const currentTime = new Date().toTimeString().slice(0, 5); // HH:MM format
+            const currentDay = new Date().toLocaleDateString('en-US', { weekday: 'long' });
+            
+            db.get(`
+                SELECT t.*, te.name as teacher_name, r.room_number 
+                FROM timetable t
+                JOIN teachers te ON t.teacher_id = te.teacher_id
+                JOIN rooms r ON t.room_id = r.id
+                WHERE r.bssid = ? AND t.day_of_week = ? 
+                AND t.start_time <= ? AND t.end_time >= ?
+                ${req.user.type === 'student' ? 'AND t.class_section = ?' : ''}
+            `, 
+            req.user.type === 'student' 
+                ? [bssid.toLowerCase(), currentDay, currentTime, currentTime, req.user.class]
+                : [bssid.toLowerCase(), currentDay, currentTime, currentTime],
+            (err, classInfo) => {
+                if (err) {
+                    console.error('Timetable query error:', err);
+                }
+                
+                res.json({
+                    success: true,
+                    message: 'WiFi network is authorized for attendance',
+                    room: {
+                        id: room.id,
+                        number: room.room_number,
+                        building: room.building,
+                        bssid: room.bssid
+                    },
+                    currentClass: classInfo || null
+                });
+            });
+        }
+    );
 });
 
 // ATTENDANCE ENDPOINTS
@@ -312,103 +507,125 @@ app.post('/validate-wifi', authenticateToken, (req, res) => {
 // Mark attendance
 app.post('/attendance/mark', authenticateToken, (req, res) => {
     const { roomId, subject, teacherId } = req.body;
-
+    
     if (req.user.type !== 'student') {
         return res.status(403).json({
             success: false,
             message: 'Only students can mark attendance'
         });
     }
-
+    
     if (!roomId) {
         return res.status(400).json({
             success: false,
             message: 'Room ID is required'
         });
     }
-
+    
     // Check if attendance already marked for today
     const today = new Date().toISOString().split('T')[0];
-    const existingRecord = attendance.find(a =>
-        a.student_id === req.user.id &&
-        a.room_id === roomId &&
-        a.timestamp.startsWith(today) &&
-        (!subject || a.subject === subject)
-    );
-
-    if (existingRecord) {
-        return res.json({
-            success: false,
-            message: 'Attendance already marked for today',
-            attendance: existingRecord
+    
+    db.get(`
+        SELECT * FROM attendance 
+        WHERE student_id = ? AND room_id = ? 
+        AND DATE(timestamp) = ?
+        ${subject ? 'AND subject = ?' : ''}
+    `, 
+    subject 
+        ? [req.user.id, roomId, today, subject]
+        : [req.user.id, roomId, today],
+    (err, existingRecord) => {
+        if (err) {
+            console.error('Database error:', err);
+            return res.status(500).json({
+                success: false,
+                message: 'Database error'
+            });
+        }
+        
+        if (existingRecord) {
+            return res.json({
+                success: false,
+                message: 'Attendance already marked for today',
+                attendance: existingRecord
+            });
+        }
+        
+        // Mark new attendance
+        db.run(`
+            INSERT INTO attendance (student_id, class_section, subject, teacher_id, room_id, status)
+            VALUES (?, ?, ?, ?, ?, 'present')
+        `, [req.user.id, req.user.class, subject || 'General', teacherId || 'SYSTEM', roomId], 
+        function(err) {
+            if (err) {
+                console.error('Database error:', err);
+                return res.status(500).json({
+                    success: false,
+                    message: 'Failed to mark attendance'
+                });
+            }
+            
+            console.log(`✅ Attendance marked for ${req.user.name} (${req.user.id}) in room ${roomId}`);
+            
+            res.json({
+                success: true,
+                message: 'Attendance marked successfully',
+                attendanceId: this.lastID,
+                timestamp: new Date().toISOString()
+            });
         });
-    }
-
-    // Mark new attendance
-    const newAttendance = {
-        id: attendance.length + 1,
-        student_id: req.user.id,
-        class_section: req.user.class,
-        subject: subject || 'General',
-        teacher_id: teacherId || 'SYSTEM',
-        room_id: roomId,
-        timestamp: new Date().toISOString(),
-        status: 'present'
-    };
-
-    attendance.push(newAttendance);
-
-    console.log(`✅ Attendance marked for ${req.user.name} (${req.user.id}) in room ${roomId}`);
-
-    res.json({
-        success: true,
-        message: 'Attendance marked successfully',
-        attendanceId: newAttendance.id,
-        timestamp: newAttendance.timestamp
     });
 });
 
-// Get attendance history
+// Get student's attendance history
 app.get('/attendance/history', authenticateToken, (req, res) => {
     const { limit = 50, offset = 0 } = req.query;
-
-    let userAttendance;
-
+    
+    let query, params;
+    
     if (req.user.type === 'student') {
-        userAttendance = attendance.filter(a => a.student_id === req.user.id);
+        query = `
+            SELECT a.*, r.room_number, r.building, t.name as teacher_name
+            FROM attendance a
+            JOIN rooms r ON a.room_id = r.id
+            LEFT JOIN teachers t ON a.teacher_id = t.teacher_id
+            WHERE a.student_id = ?
+            ORDER BY a.timestamp DESC
+            LIMIT ? OFFSET ?
+        `;
+        params = [req.user.id, parseInt(limit), parseInt(offset)];
     } else if (req.user.type === 'teacher') {
-        userAttendance = attendance.filter(a => a.teacher_id === req.user.id);
+        query = `
+            SELECT a.*, s.name as student_name, r.room_number, r.building
+            FROM attendance a
+            JOIN students s ON a.student_id = s.student_id
+            JOIN rooms r ON a.room_id = r.id
+            WHERE a.teacher_id = ?
+            ORDER BY a.timestamp DESC
+            LIMIT ? OFFSET ?
+        `;
+        params = [req.user.id, parseInt(limit), parseInt(offset)];
     } else {
         return res.status(403).json({
             success: false,
             message: 'Unauthorized access'
         });
     }
-
-    // Add additional info
-    const enrichedAttendance = userAttendance.map(record => {
-        const room = rooms.find(r => r.id === record.room_id);
-        const student = students.find(s => s.student_id === record.student_id);
-        const teacher = teachers.find(t => t.teacher_id === record.teacher_id);
-
-        return {
-            ...record,
-            room_number: room ? room.room_number : 'Unknown',
-            building: room ? room.building : 'Unknown',
-            student_name: student ? student.name : 'Unknown',
-            teacher_name: teacher ? teacher.name : 'Unknown'
-        };
-    });
-
-    // Apply pagination
-    const paginatedResults = enrichedAttendance
-        .slice(parseInt(offset), parseInt(offset) + parseInt(limit));
-
-    res.json({
-        success: true,
-        attendance: paginatedResults,
-        count: paginatedResults.length,
-        total: enrichedAttendance.length
+    
+    db.all(query, params, (err, rows) => {
+        if (err) {
+            console.error('Database error:', err);
+            return res.status(500).json({
+                success: false,
+                message: 'Database error'
+            });
+        }
+        
+        res.json({
+            success: true,
+            attendance: rows,
+            count: rows.length
+        });
     });
 });
 
@@ -416,44 +633,65 @@ app.get('/attendance/history', authenticateToken, (req, res) => {
 
 // Get timetable
 app.get('/timetable', authenticateToken, (req, res) => {
-    let userTimetable;
-
+    let query, params;
+    
     if (req.user.type === 'student') {
-        userTimetable = timetable.filter(t => t.class_section === req.user.class);
+        query = `
+            SELECT t.*, te.name as teacher_name, r.room_number, r.building
+            FROM timetable t
+            JOIN teachers te ON t.teacher_id = te.teacher_id
+            JOIN rooms r ON t.room_id = r.id
+            WHERE t.class_section = ?
+            ORDER BY 
+                CASE t.day_of_week 
+                    WHEN 'Monday' THEN 1 
+                    WHEN 'Tuesday' THEN 2 
+                    WHEN 'Wednesday' THEN 3 
+                    WHEN 'Thursday' THEN 4 
+                    WHEN 'Friday' THEN 5 
+                    WHEN 'Saturday' THEN 6 
+                    ELSE 7 
+                END, t.start_time
+        `;
+        params = [req.user.class];
     } else if (req.user.type === 'teacher') {
-        userTimetable = timetable.filter(t => t.teacher_id === req.user.id);
+        query = `
+            SELECT t.*, r.room_number, r.building
+            FROM timetable t
+            JOIN rooms r ON t.room_id = r.id
+            WHERE t.teacher_id = ?
+            ORDER BY 
+                CASE t.day_of_week 
+                    WHEN 'Monday' THEN 1 
+                    WHEN 'Tuesday' THEN 2 
+                    WHEN 'Wednesday' THEN 3 
+                    WHEN 'Thursday' THEN 4 
+                    WHEN 'Friday' THEN 5 
+                    WHEN 'Saturday' THEN 6 
+                    ELSE 7 
+                END, t.start_time
+        `;
+        params = [req.user.id];
     } else {
         return res.status(403).json({
             success: false,
             message: 'Unauthorized access'
         });
     }
-
-    // Add additional info
-    const enrichedTimetable = userTimetable.map(entry => {
-        const teacher = teachers.find(t => t.teacher_id === entry.teacher_id);
-        const room = rooms.find(r => r.id === entry.room_id);
-
-        return {
-            ...entry,
-            teacher_name: teacher ? teacher.name : 'Unknown',
-            room_number: room ? room.room_number : 'Unknown',
-            building: room ? room.building : 'Unknown'
-        };
-    });
-
-    // Sort by day and time
-    const dayOrder = { 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3, 'Thursday': 4, 'Friday': 5, 'Saturday': 6, 'Sunday': 7 };
-    enrichedTimetable.sort((a, b) => {
-        if (dayOrder[a.day_of_week] !== dayOrder[b.day_of_week]) {
-            return dayOrder[a.day_of_week] - dayOrder[b.day_of_week];
+    
+    db.all(query, params, (err, rows) => {
+        if (err) {
+            console.error('Database error:', err);
+            return res.status(500).json({
+                success: false,
+                message: 'Database error'
+            });
         }
-        return a.start_time.localeCompare(b.start_time);
-    });
-
-    res.json({
-        success: true,
-        timetable: enrichedTimetable
+        
+        res.json({
+            success: true,
+            timetable: rows
+        });
     });
 });
 
@@ -461,173 +699,62 @@ app.get('/timetable', authenticateToken, (req, res) => {
 
 // Get user profile
 app.get('/profile', authenticateToken, (req, res) => {
-    let user;
-
-    if (req.user.type === 'student') {
-        user = students.find(s => s.student_id === req.user.id);
-    } else if (req.user.type === 'teacher') {
-        user = teachers.find(t => t.teacher_id === req.user.id);
-    }
-
-    if (!user) {
-        return res.status(404).json({
-            success: false,
-            message: 'User not found'
-        });
-    }
-
-    // Remove password hash from response
-    const { password_hash, ...userProfile } = user;
-
-    res.json({
-        success: true,
-        profile: userProfile
-    });
-});
-
-// ADMIN ENDPOINTS
-
-// Sync endpoints for admin panel
-app.post('/admin/sync/room', (req, res) => {
-    const { id, room_number, bssid, building, capacity } = req.body;
+    const table = req.user.type === 'student' ? 'students' : 'teachers';
+    const idField = req.user.type === 'student' ? 'student_id' : 'teacher_id';
     
-    // Find existing room or create new
-    const existingIndex = rooms.findIndex(r => r.id === id || r.room_number === room_number);
-    const roomData = {
-        id: id || rooms.length + 1,
-        room_number,
-        bssid: bssid.toLowerCase(),
-        building,
-        capacity: capacity || 50
-    };
-    
-    if (existingIndex >= 0) {
-        rooms[existingIndex] = roomData;
-    } else {
-        rooms.push(roomData);
-    }
-    
-    console.log(`📍 Room synced: ${room_number} (${bssid})`);
-    res.json({ success: true, message: 'Room synced successfully' });
-});
-
-app.post('/admin/sync/teacher', (req, res) => {
-    const { teacher_id, name, email, department, phone, password_hash } = req.body;
-    
-    const existingIndex = teachers.findIndex(t => t.teacher_id === teacher_id);
-    const teacherData = {
-        teacher_id,
-        name,
-        email,
-        department,
-        phone,
-        password_hash
-    };
-    
-    if (existingIndex >= 0) {
-        teachers[existingIndex] = teacherData;
-    } else {
-        teachers.push(teacherData);
-    }
-    
-    console.log(`👨‍🏫 Teacher synced: ${name} (${teacher_id})`);
-    res.json({ success: true, message: 'Teacher synced successfully' });
-});
-
-app.post('/admin/sync/student', (req, res) => {
-    const { student_id, name, email, class_section, phone, password_hash } = req.body;
-    
-    const existingIndex = students.findIndex(s => s.student_id === student_id);
-    const studentData = {
-        student_id,
-        name,
-        email,
-        class_section,
-        phone,
-        password_hash
-    };
-    
-    if (existingIndex >= 0) {
-        students[existingIndex] = studentData;
-    } else {
-        students.push(studentData);
-    }
-    
-    console.log(`👨‍🎓 Student synced: ${name} (${student_id})`);
-    res.json({ success: true, message: 'Student synced successfully' });
-});
-
-app.post('/admin/sync/timetable', (req, res) => {
-    const { id, class_section, day_of_week, start_time, end_time, subject, teacher_id, room_id } = req.body;
-    
-    const existingIndex = timetable.findIndex(t => t.id === id);
-    const timetableData = {
-        id: id || timetable.length + 1,
-        class_section,
-        day_of_week,
-        start_time,
-        end_time,
-        subject,
-        teacher_id,
-        room_id
-    };
-    
-    if (existingIndex >= 0) {
-        timetable[existingIndex] = timetableData;
-    } else {
-        timetable.push(timetableData);
-    }
-    
-    console.log(`📅 Timetable synced: ${subject} - ${class_section} (${day_of_week})`);
-    res.json({ success: true, message: 'Timetable synced successfully' });
-});
-
-// Add demo data
-app.post('/admin/add-demo-data', (req, res) => {
-    // Add more demo students
-    const demoStudents = [
-        { student_id: 'S33333333', name: 'Mike Johnson', email: 'mike.johnson@school.com', class_section: 'CS-B', phone: '3333333333', password_hash: '703b0a3d6ad75b649a28adde7d83c6251da457549263bc7ff45ec709b0a8448b' },
-        { student_id: 'S44444444', name: 'Sarah Davis', email: 'sarah.davis@school.com', class_section: 'CS-B', phone: '4444444444', password_hash: '703b0a3d6ad75b649a28adde7d83c6251da457549263bc7ff45ec709b0a8448b' }
-    ];
-
-    demoStudents.forEach(student => {
-        if (!students.find(s => s.student_id === student.student_id)) {
-            students.push(student);
+    db.get(`SELECT * FROM ${table} WHERE ${idField} = ?`, [req.user.id], (err, row) => {
+        if (err) {
+            console.error('Database error:', err);
+            return res.status(500).json({
+                success: false,
+                message: 'Database error'
+            });
         }
-    });
-
-    res.json({
-        success: true,
-        message: 'Demo data added successfully',
-        studentsCount: students.length,
-        teachersCount: teachers.length,
-        roomsCount: rooms.length
+        
+        if (!row) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+        
+        // Remove password hash from response
+        delete row.password_hash;
+        
+        res.json({
+            success: true,
+            profile: row
+        });
     });
 });
 
 // Health check endpoint (Enhanced)
 app.get('/health', (req, res) => {
-    res.json({
-        status: 'Server is running',
-        timestamp: new Date().toISOString(),
-        database: {
-            connected: true,
-            rooms: rooms.length,
-            students: students.length,
-            teachers: teachers.length,
-            attendance: attendance.length
-        },
-        endpoints: {
-            auth: '/auth/student/login, /auth/teacher/login',
-            wifi: '/validate-wifi',
-            attendance: '/attendance/mark, /attendance/history',
-            timetable: '/timetable',
-            profile: '/profile'
-        },
-        demo_credentials: {
-            student: { id: 'S11111111', password: 'student123' },
-            teacher: { id: 'T12345678', password: 'teacher123' }
-        }
+    // Get database stats
+    db.get('SELECT COUNT(*) as room_count FROM rooms', (err, roomData) => {
+        db.get('SELECT COUNT(*) as student_count FROM students', (err2, studentData) => {
+            db.get('SELECT COUNT(*) as teacher_count FROM teachers', (err3, teacherData) => {
+                res.json({
+                    status: 'Server is running',
+                    timestamp: new Date().toISOString(),
+                    database: {
+                        connected: !err && !err2 && !err3,
+                        rooms: roomData ? roomData.room_count : 0,
+                        students: studentData ? studentData.student_count : 0,
+                        teachers: teacherData ? teacherData.teacher_count : 0
+                    },
+                    endpoints: {
+                        auth: '/auth/student/login, /auth/teacher/login, /auth/logout',
+                        wifi: '/validate-wifi',
+                        attendance: '/attendance/mark, /attendance/history',
+                        timetable: '/timetable',
+                        profile: '/profile',
+                        admin: '/admin/sessions, /admin/clear-sessions',
+                        sync: '/admin/sync/rooms, /admin/sync/teachers, /admin/sync/students, /admin/sync/timetable'
+                    }
+                });
+            });
+        });
     });
 });
 
@@ -645,8 +772,6 @@ app.listen(PORT, () => {
     console.log(`🚀 Let's Bunk Server running on port ${PORT}`);
     console.log(`🔗 Health check: http://localhost:${PORT}/health`);
     console.log(`🔐 Authentication endpoints available`);
+    console.log(`📊 Database integration active`);
     console.log(`📱 Ready for APK connections`);
-    console.log(`💾 Using in-memory storage (demo mode)`);
-    console.log(`👨‍🎓 Demo Student: S11111111 / student123`);
-    console.log(`👨‍🏫 Demo Teacher: T12345678 / teacher123`);
 });
