@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server-cloud.js",
     "dev": "nodemon server-cloud.js",
+    "build": "echo 'No build step required'",
     "local": "node server.js"
   },
   "dependencies": {
@@ -18,5 +19,8 @@
   },
   "engines": {
     "node": ">=18.0.0"
-  }
+  },
+  "keywords": ["express", "api", "attendance", "wifi", "bssid"],
+  "author": "LetsBunk Team",
+  "license": "MIT"
 }
