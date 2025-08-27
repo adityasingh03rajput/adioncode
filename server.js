@@ -6,8 +6,8 @@ const PORT = process.env.PORT || 3000;
 
 // Enhanced CORS configuration for production
 const corsOptions = {
-    origin: process.env.NODE_ENV === 'production' 
-        ? ['https://your-admin-domain.com', 'https://letsbunk-admin.netlify.app'] 
+    origin: process.env.NODE_ENV === 'production'
+        ? ['https://your-admin-domain.com', 'https://letsbunk-admin.netlify.app']
         : true,
     credentials: true,
     optionsSuccessStatus: 200
@@ -86,6 +86,10 @@ const hashPassword = (password) => {
 };
 
 // AUTHENTICATION ENDPOINTS
+// 
+// SESSION POLICY:
+// - STUDENTS: One device per user (if student logs in from new device, old session is replaced)
+// - TEACHERS: Multiple devices allowed (teachers can be logged in from multiple devices simultaneously)
 
 // Student login
 app.post('/auth/student/login', (req, res) => {
@@ -138,13 +142,14 @@ app.post('/auth/student/login', (req, res) => {
         { expiresIn: '24h' }
     );
 
-    // Update or create session
+    // Update or create session (students: one device per user)
     const sessionIndex = activeSessions.findIndex(s => s.userId === studentId);
     const sessionData = {
         userId: studentId,
         deviceId: deviceId || 'unknown',
         loginTime: new Date().toISOString(),
-        lastActivity: new Date().toISOString()
+        lastActivity: new Date().toISOString(),
+        userType: 'student'
     };
 
     if (sessionIndex >= 0) {
@@ -189,16 +194,9 @@ app.post('/auth/teacher/login', (req, res) => {
         });
     }
 
-    // Check for existing sessions
-    const existingSession = activeSessions.find(s => s.userId === teacherId);
+    // Teachers can login from multiple devices - no device restrictions
+    // Only check if another user is logged in on this specific device
     const deviceSession = activeSessions.find(s => s.deviceId === deviceId && s.userId !== teacherId);
-
-    if (existingSession && existingSession.deviceId !== deviceId) {
-        return res.status(409).json({
-            success: false,
-            message: 'Account is already logged in on another device'
-        });
-    }
 
     if (deviceSession) {
         return res.status(409).json({
@@ -219,22 +217,19 @@ app.post('/auth/teacher/login', (req, res) => {
         { expiresIn: '24h' }
     );
 
-    // Update or create session
-    const sessionIndex = activeSessions.findIndex(s => s.userId === teacherId);
+    // Create new session for this device (teachers can have multiple sessions)
     const sessionData = {
         userId: teacherId,
         deviceId: deviceId || 'unknown',
         loginTime: new Date().toISOString(),
-        lastActivity: new Date().toISOString()
+        lastActivity: new Date().toISOString(),
+        userType: 'teacher'
     };
 
-    if (sessionIndex >= 0) {
-        activeSessions[sessionIndex] = sessionData;
-    } else {
-        activeSessions.push(sessionData);
-    }
+    // Add new session (don't replace existing ones for teachers)
+    activeSessions.push(sessionData);
 
-    console.log(`🔐 Teacher login: ${teacher.name} (${teacherId}) on device ${deviceId}`);
+    console.log(`🔐 Teacher login: ${teacher.name} (${teacherId}) on device ${deviceId} - Multiple devices allowed`);
 
     res.json({
         success: true,
@@ -253,12 +248,13 @@ app.post('/auth/teacher/login', (req, res) => {
 app.post('/auth/logout', authenticateToken, (req, res) => {
     const userId = req.user.id;
     const deviceId = req.user.deviceId;
+    const userType = req.user.type;
 
-    // Remove session
+    // Remove session for this specific device
     const sessionIndex = activeSessions.findIndex(s => s.userId === userId && s.deviceId === deviceId);
     if (sessionIndex >= 0) {
         activeSessions.splice(sessionIndex, 1);
-        console.log(`🔓 User logout: ${userId} from device ${deviceId}`);
+        console.log(`🔓 ${userType} logout: ${userId} from device ${deviceId}`);
     }
 
     res.json({
@@ -515,7 +511,7 @@ app.get('/profile', authenticateToken, (req, res) => {
 // Sync endpoints for admin panel
 app.post('/admin/sync/room', (req, res) => {
     const { id, room_number, bssid, building, capacity } = req.body;
-    
+
     // Find existing room or create new
     const existingIndex = rooms.findIndex(r => r.id === id || r.room_number === room_number);
     const roomData = {
@@ -525,20 +521,20 @@ app.post('/admin/sync/room', (req, res) => {
         building,
         capacity: capacity || 50
     };
-    
+
     if (existingIndex >= 0) {
         rooms[existingIndex] = roomData;
     } else {
         rooms.push(roomData);
     }
-    
+
     console.log(`📍 Room synced: ${room_number} (${bssid})`);
     res.json({ success: true, message: 'Room synced successfully' });
 });
 
 app.post('/admin/sync/teacher', (req, res) => {
     const { teacher_id, name, email, department, phone, password_hash } = req.body;
-    
+
     const existingIndex = teachers.findIndex(t => t.teacher_id === teacher_id);
     const teacherData = {
         teacher_id,
@@ -548,20 +544,20 @@ app.post('/admin/sync/teacher', (req, res) => {
         phone,
         password_hash
     };
-    
+
     if (existingIndex >= 0) {
         teachers[existingIndex] = teacherData;
     } else {
         teachers.push(teacherData);
     }
-    
+
     console.log(`👨‍🏫 Teacher synced: ${name} (${teacher_id})`);
     res.json({ success: true, message: 'Teacher synced successfully' });
 });
 
 app.post('/admin/sync/student', (req, res) => {
     const { student_id, name, email, class_section, phone, password_hash } = req.body;
-    
+
     const existingIndex = students.findIndex(s => s.student_id === student_id);
     const studentData = {
         student_id,
@@ -571,20 +567,20 @@ app.post('/admin/sync/student', (req, res) => {
         phone,
         password_hash
     };
-    
+
     if (existingIndex >= 0) {
         students[existingIndex] = studentData;
     } else {
         students.push(studentData);
     }
-    
+
     console.log(`👨‍🎓 Student synced: ${name} (${student_id})`);
     res.json({ success: true, message: 'Student synced successfully' });
 });
 
 app.post('/admin/sync/timetable', (req, res) => {
     const { id, class_section, day_of_week, start_time, end_time, subject, teacher_id, room_id } = req.body;
-    
+
     const existingIndex = timetable.findIndex(t => t.id === id);
     const timetableData = {
         id: id || timetable.length + 1,
@@ -596,13 +592,13 @@ app.post('/admin/sync/timetable', (req, res) => {
         teacher_id,
         room_id
     };
-    
+
     if (existingIndex >= 0) {
         timetable[existingIndex] = timetableData;
     } else {
         timetable.push(timetableData);
     }
-    
+
     console.log(`📅 Timetable synced: ${subject} - ${class_section} (${day_of_week})`);
     res.json({ success: true, message: 'Timetable synced successfully' });
 });
@@ -612,16 +608,16 @@ app.post('/admin/sync/timetable', (req, res) => {
 // Bulk sync rooms
 app.post('/admin/sync/rooms', (req, res) => {
     const { rooms: newRooms } = req.body;
-    
+
     if (!newRooms || !Array.isArray(newRooms)) {
         return res.status(400).json({
             success: false,
             message: 'Rooms array is required'
         });
     }
-    
+
     console.log(`📊 Bulk syncing ${newRooms.length} rooms from admin panel`);
-    
+
     // Replace all rooms with new data
     rooms = newRooms.map((room, index) => ({
         id: room.id || index + 1,
@@ -630,7 +626,7 @@ app.post('/admin/sync/rooms', (req, res) => {
         building: room.building || 'Unknown',
         capacity: room.capacity || 50
     }));
-    
+
     res.json({
         success: true,
         message: `Synced ${rooms.length} rooms successfully`
@@ -640,16 +636,16 @@ app.post('/admin/sync/rooms', (req, res) => {
 // Bulk sync teachers
 app.post('/admin/sync/teachers', (req, res) => {
     const { teachers: newTeachers } = req.body;
-    
+
     if (!newTeachers || !Array.isArray(newTeachers)) {
         return res.status(400).json({
             success: false,
             message: 'Teachers array is required'
         });
     }
-    
+
     console.log(`👨‍🏫 Bulk syncing ${newTeachers.length} teachers from admin panel`);
-    
+
     // Replace all teachers with new data
     teachers = newTeachers.map(teacher => ({
         teacher_id: teacher.teacher_id,
@@ -659,7 +655,7 @@ app.post('/admin/sync/teachers', (req, res) => {
         phone: teacher.phone || '',
         password_hash: teacher.password_hash
     }));
-    
+
     res.json({
         success: true,
         message: `Synced ${teachers.length} teachers successfully`
@@ -669,16 +665,16 @@ app.post('/admin/sync/teachers', (req, res) => {
 // Bulk sync students
 app.post('/admin/sync/students', (req, res) => {
     const { students: newStudents } = req.body;
-    
+
     if (!newStudents || !Array.isArray(newStudents)) {
         return res.status(400).json({
             success: false,
             message: 'Students array is required'
         });
     }
-    
+
     console.log(`👨‍🎓 Bulk syncing ${newStudents.length} students from admin panel`);
-    
+
     // Replace all students with new data
     students = newStudents.map(student => ({
         student_id: student.student_id,
@@ -688,7 +684,7 @@ app.post('/admin/sync/students', (req, res) => {
         phone: student.phone || '',
         password_hash: student.password_hash
     }));
-    
+
     res.json({
         success: true,
         message: `Synced ${students.length} students successfully`
@@ -698,16 +694,16 @@ app.post('/admin/sync/students', (req, res) => {
 // Bulk sync timetable
 app.post('/admin/sync/timetable', (req, res) => {
     const { timetable: newTimetable } = req.body;
-    
+
     if (!newTimetable || !Array.isArray(newTimetable)) {
         return res.status(400).json({
             success: false,
             message: 'Timetable array is required'
         });
     }
-    
+
     console.log(`📅 Bulk syncing ${newTimetable.length} timetable entries from admin panel`);
-    
+
     // Replace all timetable with new data
     timetable = newTimetable.map((entry, index) => ({
         id: entry.id || index + 1,
@@ -719,7 +715,7 @@ app.post('/admin/sync/timetable', (req, res) => {
         teacher_id: entry.teacher_id,
         room_id: entry.room_id
     }));
-    
+
     res.json({
         success: true,
         message: `Synced ${timetable.length} timetable entries successfully`
@@ -766,7 +762,7 @@ app.get('/admin/dashboard', (req, res) => {
             room_name: rooms.find(r => r.id === a.room_id)?.room_number || 'Unknown'
         }))
     };
-    
+
     res.json({
         success: true,
         stats: stats,
@@ -779,41 +775,41 @@ app.get('/admin/dashboard', (req, res) => {
 // Clear all data (admin only)
 app.post('/admin/clear-all', (req, res) => {
     const { confirm } = req.body;
-    
+
     if (confirm !== 'CLEAR_ALL_DATA') {
         return res.status(400).json({
             success: false,
             message: 'Confirmation required. Send {"confirm": "CLEAR_ALL_DATA"}'
         });
     }
-    
+
     // Keep demo data but clear user-added data
     rooms = [
         { id: 1, room_number: 'CS-101', bssid: '6a:5e:31:58:9b:61', building: 'Computer Science Block', capacity: 50 },
         { id: 2, room_number: 'CS-102', bssid: '2c:4f:22:67:8a:45', building: 'Computer Science Block', capacity: 40 },
         { id: 3, room_number: 'MATH-201', bssid: '8e:3d:11:89:5c:23', building: 'Mathematics Block', capacity: 60 }
     ];
-    
+
     teachers = [
         { teacher_id: 'T12345678', name: 'Dr. Alice Brown', email: 'alice.brown@school.com', department: 'Computer Science', phone: '1234567890', password_hash: 'ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f' },
         { teacher_id: 'T87654321', name: 'Prof. Bob Wilson', email: 'bob.wilson@school.com', department: 'Mathematics', phone: '0987654321', password_hash: 'ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f' }
     ];
-    
+
     students = [
         { student_id: 'S11111111', name: 'John Doe', email: 'john.doe@school.com', class_section: 'CS-A', phone: '1111111111', password_hash: '703b0a3d6ad75b649a28adde7d83c6251da457549263bc7ff45ec709b0a8448b' },
         { student_id: 'S22222222', name: 'Jane Smith', email: 'jane.smith@school.com', class_section: 'CS-A', phone: '2222222222', password_hash: '703b0a3d6ad75b649a28adde7d83c6251da457549263bc7ff45ec709b0a8448b' }
     ];
-    
+
     timetable = [
         { id: 1, class_section: 'CS-A', day_of_week: 'Monday', start_time: '09:00', end_time: '10:30', subject: 'Data Structures', teacher_id: 'T12345678', room_id: 1 },
         { id: 2, class_section: 'CS-A', day_of_week: 'Monday', start_time: '11:00', end_time: '12:30', subject: 'Mathematics', teacher_id: 'T87654321', room_id: 3 }
     ];
-    
+
     attendance = [];
     activeSessions = [];
-    
+
     console.log('🧹 All data cleared, reset to demo state');
-    
+
     res.json({
         success: true,
         message: 'All data cleared successfully',
@@ -824,35 +820,45 @@ app.post('/admin/clear-all', (req, res) => {
 // Get active sessions
 app.get('/admin/sessions', (req, res) => {
     const sessionsWithDetails = activeSessions.map(session => {
-        const user = students.find(s => s.student_id === session.userId) || 
-                    teachers.find(t => t.teacher_id === session.userId);
-        
+        const user = students.find(s => s.student_id === session.userId) ||
+            teachers.find(t => t.teacher_id === session.userId);
+
         return {
             ...session,
             userName: user?.name || 'Unknown',
-            userType: students.find(s => s.student_id === session.userId) ? 'student' : 'teacher'
+            userType: session.userType || (students.find(s => s.student_id === session.userId) ? 'student' : 'teacher')
         };
     });
-    
+
+    // Group sessions by user type for better overview
+    const studentSessions = sessionsWithDetails.filter(s => s.userType === 'student');
+    const teacherSessions = sessionsWithDetails.filter(s => s.userType === 'teacher');
+
     res.json({
         success: true,
         sessions: sessionsWithDetails,
-        count: activeSessions.length
+        count: activeSessions.length,
+        breakdown: {
+            students: studentSessions.length,
+            teachers: teacherSessions.length,
+            uniqueStudents: new Set(studentSessions.map(s => s.userId)).size,
+            uniqueTeachers: new Set(teacherSessions.map(s => s.userId)).size
+        }
     });
 });
 
 // Clear specific session
 app.post('/admin/clear-session', (req, res) => {
     const { userId, deviceId } = req.body;
-    
-    const sessionIndex = activeSessions.findIndex(s => 
+
+    const sessionIndex = activeSessions.findIndex(s =>
         s.userId === userId && (!deviceId || s.deviceId === deviceId)
     );
-    
+
     if (sessionIndex >= 0) {
         const removedSession = activeSessions.splice(sessionIndex, 1)[0];
         console.log(`🔓 Admin cleared session: ${removedSession.userId} from ${removedSession.deviceId}`);
-        
+
         res.json({
             success: true,
             message: 'Session cleared successfully'
@@ -869,7 +875,7 @@ app.post('/admin/clear-session', (req, res) => {
 app.get('/health', (req, res) => {
     const uptime = process.uptime();
     const memory = process.memoryUsage();
-    
+
     res.json({
         status: '🚀 Server is running perfectly',
         version: '2.0.0',
@@ -890,7 +896,8 @@ app.get('/health', (req, res) => {
             teachers: teachers.length,
             timetable: timetable.length,
             attendance: attendance.length,
-            activeSessions: activeSessions.length
+            activeSessions: activeSessions.length,
+            sessionPolicy: 'Students: 1 device per user | Teachers: Multiple devices allowed'
         },
         endpoints: {
             authentication: [
@@ -917,19 +924,19 @@ app.get('/health', (req, res) => {
             ],
             sync: [
                 'POST /admin/sync/rooms',
-                'POST /admin/sync/teachers', 
+                'POST /admin/sync/teachers',
                 'POST /admin/sync/students',
                 'POST /admin/sync/timetable'
             ]
         },
         demo_credentials: {
-            student: { 
-                id: 'S11111111', 
+            student: {
+                id: 'S11111111',
                 password: 'student123',
                 note: 'Use these credentials to test the mobile app'
             },
-            teacher: { 
-                id: 'T12345678', 
+            teacher: {
+                id: 'T12345678',
                 password: 'teacher123',
                 note: 'Use these credentials to test teacher features'
             }
