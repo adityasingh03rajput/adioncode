@@ -44,8 +44,8 @@ let rooms = [
 ];
 
 let teachers = [
-    { teacher_id: 'T12345678', name: 'Dr. Alice Brown', email: 'alice.brown@school.com', department: 'Computer Science', phone: '1234567890', password_hash: 'ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f' },
-    { teacher_id: 'T87654321', name: 'Prof. Bob Wilson', email: 'bob.wilson@school.com', department: 'Mathematics', phone: '0987654321', password_hash: 'ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f' }
+    { teacher_id: 'T12345678', name: 'Dr. Alice Brown', email: 'alice.brown@school.com', department: 'Computer Science', phone: '1234567890', password_hash: 'cde383eee8ee7a4400adf7a15f716f179a2eb97646b37e089eb8d6d04e663416' },
+    { teacher_id: 'T87654321', name: 'Prof. Bob Wilson', email: 'bob.wilson@school.com', department: 'Mathematics', phone: '0987654321', password_hash: 'cde383eee8ee7a4400adf7a15f716f179a2eb97646b37e089eb8d6d04e663416' }
 ];
 
 let students = [
@@ -791,8 +791,8 @@ app.post('/admin/clear-all', (req, res) => {
     ];
 
     teachers = [
-        { teacher_id: 'T12345678', name: 'Dr. Alice Brown', email: 'alice.brown@school.com', department: 'Computer Science', phone: '1234567890', password_hash: 'ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f' },
-        { teacher_id: 'T87654321', name: 'Prof. Bob Wilson', email: 'bob.wilson@school.com', department: 'Mathematics', phone: '0987654321', password_hash: 'ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f' }
+        { teacher_id: 'T12345678', name: 'Dr. Alice Brown', email: 'alice.brown@school.com', department: 'Computer Science', phone: '1234567890', password_hash: 'cde383eee8ee7a4400adf7a15f716f179a2eb97646b37e089eb8d6d04e663416' },
+        { teacher_id: 'T87654321', name: 'Prof. Bob Wilson', email: 'bob.wilson@school.com', department: 'Mathematics', phone: '0987654321', password_hash: 'cde383eee8ee7a4400adf7a15f716f179a2eb97646b37e089eb8d6d04e663416' }
     ];
 
     students = [
