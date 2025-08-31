@@ -1,12 +1,13 @@
 {
-  "name": "lets-bunk-server",
-  "version": "1.0.0",
-  "description": "Server for Let's Bunk app to validate WiFi BSSID",
+  "name": "letsbunk-server",
+  "version": "2.0.0",
+  "description": "Enhanced LetsBunk Server - WiFi-based Attendance System with Admin Panel Support",
   "main": "server-cloud.js",
   "scripts": {
     "start": "node server-cloud.js",
     "dev": "nodemon server-cloud.js",
-    "build": "echo 'No build step required'",
+    "build": "echo 'No build step required - Ready for deployment'",
+    "test": "echo 'Server health check' && curl -f http://localhost:3000/health || exit 1",
     "local": "node server.js"
   },
   "dependencies": {
@@ -18,9 +19,24 @@
     "nodemon": "^3.0.1"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
   },
-  "keywords": ["express", "api", "attendance", "wifi", "bssid"],
+  "keywords": [
+    "attendance-system",
+    "wifi-validation", 
+    "express-api",
+    "jwt-authentication",
+    "mobile-app-backend",
+    "admin-panel",
+    "bssid-validation",
+    "education-technology"
+  ],
   "author": "LetsBunk Team",
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/letsbunk/server.git"
+  },
+  "homepage": "https://letsbunk-server.onrender.com/health"
 }
