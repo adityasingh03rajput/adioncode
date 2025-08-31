@@ -44,8 +44,8 @@ let rooms = [
 ];
 
 let teachers = [
-    { teacher_id: 'T12345678', name: 'Dr. Alice Brown', email: 'alice.brown@school.com', department: 'Computer Science', phone: '1234567890', password_hash: 'cde383eee8ee7a4400adf7a15f716f179a2eb97646b37e089eb8d6d04e663416' },
-    { teacher_id: 'T87654321', name: 'Prof. Bob Wilson', email: 'bob.wilson@school.com', department: 'Mathematics', phone: '0987654321', password_hash: 'cde383eee8ee7a4400adf7a15f716f179a2eb97646b37e089eb8d6d04e663416' }
+    { teacher_id: 'T12345678', name: 'Dr. Alice Brown', email: 'alice.brown@school.com', department: 'Computer Science', phone: '1234567890', password_hash: 'ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f' },
+    { teacher_id: 'T87654321', name: 'Prof. Bob Wilson', email: 'bob.wilson@school.com', department: 'Mathematics', phone: '0987654321', password_hash: 'ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f' }
 ];
 
 let students = [
@@ -86,10 +86,6 @@ const hashPassword = (password) => {
 };
 
 // AUTHENTICATION ENDPOINTS
-// 
-// SESSION POLICY:
-// - STUDENTS: One device per user (if student logs in from new device, old session is replaced)
-// - TEACHERS: Multiple devices allowed (teachers can be logged in from multiple devices simultaneously)
 
 // Student login
 app.post('/auth/student/login', (req, res) => {
@@ -142,14 +138,13 @@ app.post('/auth/student/login', (req, res) => {
         { expiresIn: '24h' }
     );
 
-    // Update or create session (students: one device per user)
+    // Update or create session
     const sessionIndex = activeSessions.findIndex(s => s.userId === studentId);
     const sessionData = {
         userId: studentId,
         deviceId: deviceId || 'unknown',
         loginTime: new Date().toISOString(),
-        lastActivity: new Date().toISOString(),
-        userType: 'student'
+        lastActivity: new Date().toISOString()
     };
 
     if (sessionIndex >= 0) {
@@ -194,9 +189,16 @@ app.post('/auth/teacher/login', (req, res) => {
         });
     }
 
-    // Teachers can login from multiple devices - no device restrictions
-    // Only check if another user is logged in on this specific device
+    // Check for existing sessions
+    const existingSession = activeSessions.find(s => s.userId === teacherId);
     const deviceSession = activeSessions.find(s => s.deviceId === deviceId && s.userId !== teacherId);
+
+    if (existingSession && existingSession.deviceId !== deviceId) {
+        return res.status(409).json({
+            success: false,
+            message: 'Account is already logged in on another device'
+        });
+    }
 
     if (deviceSession) {
         return res.status(409).json({
@@ -217,19 +219,22 @@ app.post('/auth/teacher/login', (req, res) => {
         { expiresIn: '24h' }
     );
 
-    // Create new session for this device (teachers can have multiple sessions)
+    // Update or create session
+    const sessionIndex = activeSessions.findIndex(s => s.userId === teacherId);
     const sessionData = {
         userId: teacherId,
         deviceId: deviceId || 'unknown',
         loginTime: new Date().toISOString(),
-        lastActivity: new Date().toISOString(),
-        userType: 'teacher'
+        lastActivity: new Date().toISOString()
     };
 
-    // Add new session (don't replace existing ones for teachers)
-    activeSessions.push(sessionData);
+    if (sessionIndex >= 0) {
+        activeSessions[sessionIndex] = sessionData;
+    } else {
+        activeSessions.push(sessionData);
+    }
 
-    console.log(`🔐 Teacher login: ${teacher.name} (${teacherId}) on device ${deviceId} - Multiple devices allowed`);
+    console.log(`🔐 Teacher login: ${teacher.name} (${teacherId}) on device ${deviceId}`);
 
     res.json({
         success: true,
@@ -248,13 +253,12 @@ app.post('/auth/teacher/login', (req, res) => {
 app.post('/auth/logout', authenticateToken, (req, res) => {
     const userId = req.user.id;
     const deviceId = req.user.deviceId;
-    const userType = req.user.type;
 
-    // Remove session for this specific device
+    // Remove session
     const sessionIndex = activeSessions.findIndex(s => s.userId === userId && s.deviceId === deviceId);
     if (sessionIndex >= 0) {
         activeSessions.splice(sessionIndex, 1);
-        console.log(`🔓 ${userType} logout: ${userId} from device ${deviceId}`);
+        console.log(`🔓 User logout: ${userId} from device ${deviceId}`);
     }
 
     res.json({
@@ -791,8 +795,8 @@ app.post('/admin/clear-all', (req, res) => {
     ];
 
     teachers = [
-        { teacher_id: 'T12345678', name: 'Dr. Alice Brown', email: 'alice.brown@school.com', department: 'Computer Science', phone: '1234567890', password_hash: 'cde383eee8ee7a4400adf7a15f716f179a2eb97646b37e089eb8d6d04e663416' },
-        { teacher_id: 'T87654321', name: 'Prof. Bob Wilson', email: 'bob.wilson@school.com', department: 'Mathematics', phone: '0987654321', password_hash: 'cde383eee8ee7a4400adf7a15f716f179a2eb97646b37e089eb8d6d04e663416' }
+        { teacher_id: 'T12345678', name: 'Dr. Alice Brown', email: 'alice.brown@school.com', department: 'Computer Science', phone: '1234567890', password_hash: 'ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f' },
+        { teacher_id: 'T87654321', name: 'Prof. Bob Wilson', email: 'bob.wilson@school.com', department: 'Mathematics', phone: '0987654321', password_hash: 'ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f' }
     ];
 
     students = [
@@ -826,24 +830,14 @@ app.get('/admin/sessions', (req, res) => {
         return {
             ...session,
             userName: user?.name || 'Unknown',
-            userType: session.userType || (students.find(s => s.student_id === session.userId) ? 'student' : 'teacher')
+            userType: students.find(s => s.student_id === session.userId) ? 'student' : 'teacher'
         };
     });
-
-    // Group sessions by user type for better overview
-    const studentSessions = sessionsWithDetails.filter(s => s.userType === 'student');
-    const teacherSessions = sessionsWithDetails.filter(s => s.userType === 'teacher');
 
     res.json({
         success: true,
         sessions: sessionsWithDetails,
-        count: activeSessions.length,
-        breakdown: {
-            students: studentSessions.length,
-            teachers: teacherSessions.length,
-            uniqueStudents: new Set(studentSessions.map(s => s.userId)).size,
-            uniqueTeachers: new Set(teacherSessions.map(s => s.userId)).size
-        }
+        count: activeSessions.length
     });
 });
 
@@ -896,8 +890,7 @@ app.get('/health', (req, res) => {
             teachers: teachers.length,
             timetable: timetable.length,
             attendance: attendance.length,
-            activeSessions: activeSessions.length,
-            sessionPolicy: 'Students: 1 device per user | Teachers: Multiple devices allowed'
+            activeSessions: activeSessions.length
         },
         endpoints: {
             authentication: [
@@ -982,7 +975,7 @@ app.use('*', (req, res) => {
 // Start server
 app.listen(PORT, '0.0.0.0', () => {
     console.log('\n🎉 LetsBunk Server v2.0 Started Successfully!');
-    console.log('=' * 50);
+    console.log('='.repeat(50));
     console.log(`🚀 Server running on port: ${PORT}`);
     console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(`🔗 Health check: http://localhost:${PORT}/health`);
@@ -1003,5 +996,5 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log('\n💾 Database: In-Memory (Perfect for Render)');
     console.log(`📊 Initial Data: ${rooms.length} rooms, ${students.length} students, ${teachers.length} teachers`);
     console.log('\n✅ Server ready for connections!');
-    console.log('=' * 50);
+    console.log('='.repeat(50));
 });
