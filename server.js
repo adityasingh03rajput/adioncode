@@ -462,12 +462,11 @@ app.post('/api/bssid/update', (req, res) => {
             });
         }
 
-        // Validate BSSID format (basic MAC address validation)
-        const bssidRegex = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/;
-        if (!bssidRegex.test(bssid)) {
+        // Accept any BSSID format (MAC address, IP address, or custom identifier)
+        if (!bssid || bssid.trim().length === 0) {
             return res.status(400).json({
                 success: false,
-                message: 'Invalid BSSID format. Use MAC address format (XX:XX:XX:XX:XX:XX)'
+                message: 'BSSID cannot be empty'
             });
         }
 
@@ -555,12 +554,15 @@ app.post('/api/bssid/add', (req, res) => {
             });
         }
 
-        // Validate BSSID format
-        const bssidRegex = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/;
-        if (!bssidRegex.test(bssid)) {
+        // Validate BSSID format (MAC address or IP address)
+        const macRegex = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/;
+        const ipRegex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+        
+        // Accept any BSSID format (MAC address, IP address, or custom identifier)
+        if (!bssid || bssid.trim().length === 0) {
             return res.status(400).json({
                 success: false,
-                message: 'Invalid BSSID format. Use MAC address format (XX:XX:XX:XX:XX:XX)'
+                message: 'BSSID cannot be empty'
             });
         }
 
