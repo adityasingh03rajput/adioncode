@@ -10,7 +10,8 @@ app.use(express.json());
 
 // In-memory storage for device timers and BSSID management
 let deviceTimers = new Map();
-let authorizedBSSID = '2a:d0:43:d1:34:bf'; // Default BSSID
+// Support multiple authorized BSSIDs
+let authorizedBSSIDs = ['2a:d0:43:d1:34:bf']; // Array of authorized BSSIDs
 let bssidHistory = []; // Store BSSID change history
 
 // Device timer states
@@ -39,11 +40,11 @@ app.post('/api/timer/start', (req, res) => {
 
         console.log(`🟢 Timer START request: Device ${deviceId} at BSSID ${bssid}, Student: ${studentName || 'Anonymous'}`);
 
-        // Validate required BSSID (now dynamic)
-        if (bssid !== authorizedBSSID) {
+        // Validate required BSSID (check against multiple authorized BSSIDs)
+        if (!authorizedBSSIDs.includes(bssid)) {
             return res.status(403).json({
                 success: false,
-                message: `Timer can only be started on authorized network (${authorizedBSSID})`
+                message: `Timer can only be started on authorized networks: ${authorizedBSSIDs.join(', ')}`
             });
         }
 
@@ -426,13 +427,16 @@ app.post('/api/timers/clear-completed', (req, res) => {
 // Get current authorized BSSID
 app.get('/api/bssid/current', (req, res) => {
     try {
-        console.log(`📡 BSSID request - Current: ${authorizedBSSID}`);
+        console.log(`📡 BSSID request - Current authorized BSSIDs: ${authorizedBSSIDs.join(', ')}`);
 
         res.json({
             success: true,
-            bssid: authorizedBSSID,
+            bssids: authorizedBSSIDs,
+            primaryBSSID: authorizedBSSIDs[0], // For backward compatibility
+            bssid: authorizedBSSIDs[0], // For backward compatibility
+            count: authorizedBSSIDs.length,
             timestamp: new Date().toISOString(),
-            message: 'Current authorized BSSID retrieved successfully'
+            message: 'Current authorized BSSIDs retrieved successfully'
         });
 
     } catch (error) {
@@ -467,17 +471,22 @@ app.post('/api/bssid/update', (req, res) => {
             });
         }
 
-        // Store old BSSID for history
-        const oldBSSID = authorizedBSSID;
+        // Store old BSSIDs for history
+        const oldBSSIDs = [...authorizedBSSIDs];
 
-        // Update authorized BSSID
-        authorizedBSSID = bssid;
+        // Update primary BSSID (replace first one or add if not exists)
+        if (authorizedBSSIDs.length > 0) {
+            authorizedBSSIDs[0] = bssid;
+        } else {
+            authorizedBSSIDs.push(bssid);
+        }
 
         // Add to history
         const historyEntry = {
-            oldBSSID: oldBSSID,
-            newBSSID: bssid,
-            description: description || 'BSSID updated via API',
+            oldBSSIDs: oldBSSIDs,
+            newBSSIDs: [...authorizedBSSIDs],
+            action: 'update_primary',
+            description: description || 'Primary BSSID updated via API',
             updatedBy: updatedBy || 'API',
             timestamp: new Date().toISOString()
         };
@@ -489,13 +498,14 @@ app.post('/api/bssid/update', (req, res) => {
             bssidHistory = bssidHistory.slice(-100);
         }
 
-        console.log(`✅ BSSID updated: ${oldBSSID} → ${bssid}`);
+        console.log(`✅ Primary BSSID updated: ${oldBSSIDs[0]} → ${bssid}`);
 
         res.json({
             success: true,
-            message: 'BSSID updated successfully',
-            oldBSSID: oldBSSID,
-            newBSSID: bssid,
+            message: 'Primary BSSID updated successfully',
+            oldBSSIDs: oldBSSIDs,
+            newBSSIDs: [...authorizedBSSIDs],
+            primaryBSSID: bssid,
             timestamp: new Date().toISOString()
         });
 
@@ -516,13 +526,182 @@ app.get('/api/bssid/history', (req, res) => {
         res.json({
             success: true,
             history: bssidHistory,
-            currentBSSID: authorizedBSSID,
+            currentBSSIDs: authorizedBSSIDs,
+            primaryBSSID: authorizedBSSIDs[0],
             totalEntries: bssidHistory.length,
             timestamp: new Date().toISOString()
         });
 
     } catch (error) {
         console.error('Get BSSID history error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Internal server error'
+        });
+    }
+});
+
+// Add new authorized BSSID
+app.post('/api/bssid/add', (req, res) => {
+    try {
+        const { bssid, description, updatedBy } = req.body;
+
+        console.log(`➕ BSSID ADD request: ${bssid} by ${updatedBy || 'Unknown'}`);
+
+        if (!bssid) {
+            return res.status(400).json({
+                success: false,
+                message: 'BSSID is required'
+            });
+        }
+
+        // Validate BSSID format
+        const bssidRegex = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/;
+        if (!bssidRegex.test(bssid)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid BSSID format. Use MAC address format (XX:XX:XX:XX:XX:XX)'
+            });
+        }
+
+        // Check if BSSID already exists
+        if (authorizedBSSIDs.includes(bssid)) {
+            return res.status(400).json({
+                success: false,
+                message: 'BSSID already authorized'
+            });
+        }
+
+        // Add new BSSID
+        const oldBSSIDs = [...authorizedBSSIDs];
+        authorizedBSSIDs.push(bssid);
+
+        // Add to history
+        const historyEntry = {
+            oldBSSIDs: oldBSSIDs,
+            newBSSIDs: [...authorizedBSSIDs],
+            action: 'add',
+            addedBSSID: bssid,
+            description: description || 'New BSSID added via API',
+            updatedBy: updatedBy || 'API',
+            timestamp: new Date().toISOString()
+        };
+
+        bssidHistory.push(historyEntry);
+
+        // Keep only last 100 history entries
+        if (bssidHistory.length > 100) {
+            bssidHistory = bssidHistory.slice(-100);
+        }
+
+        console.log(`✅ BSSID added: ${bssid} (Total: ${authorizedBSSIDs.length})`);
+
+        res.json({
+            success: true,
+            message: 'BSSID added successfully',
+            addedBSSID: bssid,
+            authorizedBSSIDs: [...authorizedBSSIDs],
+            totalCount: authorizedBSSIDs.length,
+            timestamp: new Date().toISOString()
+        });
+
+    } catch (error) {
+        console.error('Add BSSID error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Internal server error'
+        });
+    }
+});
+
+// Remove authorized BSSID
+app.post('/api/bssid/remove', (req, res) => {
+    try {
+        const { bssid, description, updatedBy } = req.body;
+
+        console.log(`➖ BSSID REMOVE request: ${bssid} by ${updatedBy || 'Unknown'}`);
+
+        if (!bssid) {
+            return res.status(400).json({
+                success: false,
+                message: 'BSSID is required'
+            });
+        }
+
+        // Check if BSSID exists
+        if (!authorizedBSSIDs.includes(bssid)) {
+            return res.status(400).json({
+                success: false,
+                message: 'BSSID not found in authorized list'
+            });
+        }
+
+        // Prevent removing the last BSSID
+        if (authorizedBSSIDs.length === 1) {
+            return res.status(400).json({
+                success: false,
+                message: 'Cannot remove the last authorized BSSID'
+            });
+        }
+
+        // Remove BSSID
+        const oldBSSIDs = [...authorizedBSSIDs];
+        authorizedBSSIDs = authorizedBSSIDs.filter(b => b !== bssid);
+
+        // Add to history
+        const historyEntry = {
+            oldBSSIDs: oldBSSIDs,
+            newBSSIDs: [...authorizedBSSIDs],
+            action: 'remove',
+            removedBSSID: bssid,
+            description: description || 'BSSID removed via API',
+            updatedBy: updatedBy || 'API',
+            timestamp: new Date().toISOString()
+        };
+
+        bssidHistory.push(historyEntry);
+
+        // Keep only last 100 history entries
+        if (bssidHistory.length > 100) {
+            bssidHistory = bssidHistory.slice(-100);
+        }
+
+        console.log(`✅ BSSID removed: ${bssid} (Remaining: ${authorizedBSSIDs.length})`);
+
+        res.json({
+            success: true,
+            message: 'BSSID removed successfully',
+            removedBSSID: bssid,
+            authorizedBSSIDs: [...authorizedBSSIDs],
+            totalCount: authorizedBSSIDs.length,
+            timestamp: new Date().toISOString()
+        });
+
+    } catch (error) {
+        console.error('Remove BSSID error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Internal server error'
+        });
+    }
+});
+
+// Get all authorized BSSIDs
+app.get('/api/bssid/all', (req, res) => {
+    try {
+        console.log(`📡 All BSSIDs request - ${authorizedBSSIDs.length} authorized BSSIDs`);
+
+        res.json({
+            success: true,
+            bssids: authorizedBSSIDs,
+            primaryBSSID: authorizedBSSIDs[0],
+            count: authorizedBSSIDs.length,
+            timestamp: new Date().toISOString(),
+            message: 'All authorized BSSIDs retrieved successfully'
+        });
+
+    } catch (error) {
+        console.error('Get all BSSIDs error:', error);
         res.status(500).json({
             success: false,
             message: 'Internal server error'
@@ -568,7 +747,7 @@ setInterval(() => {
 app.listen(PORT, () => {
     console.log(`� LettsBunk Royal Server running on port ${PORT}`);
     console.log(`📊 Timer tracking system with student names ready`);
-    console.log(`🌐 Current Authorized BSSID: ${authorizedBSSID}`);
+    console.log(`🌐 Authorized BSSIDs (${authorizedBSSIDs.length}): ${authorizedBSSIDs.join(', ')}`);
     console.log(`🎨 Royal Olive & Sand Brown Theme Support`);
     console.log(`📱 API Endpoints available:`);
     console.log(`   POST /api/timer/start - Start timer (with student name)`);
@@ -580,8 +759,11 @@ app.listen(PORT, () => {
     console.log(`   GET /api/timer/:deviceId - Get specific timer`);
     console.log(`   POST /api/timers/clear-completed - Clear completed timers`);
     console.log(`   DELETE /api/timers/cleanup - Auto cleanup old timers`);
-    console.log(`   GET /api/bssid/current - Get current authorized BSSID`);
-    console.log(`   POST /api/bssid/update - Update authorized BSSID`);
+    console.log(`   GET /api/bssid/current - Get current authorized BSSIDs`);
+    console.log(`   GET /api/bssid/all - Get all authorized BSSIDs`);
+    console.log(`   POST /api/bssid/update - Update primary BSSID`);
+    console.log(`   POST /api/bssid/add - Add new authorized BSSID`);
+    console.log(`   POST /api/bssid/remove - Remove authorized BSSID`);
     console.log(`   GET /api/bssid/history - Get BSSID change history`);
     console.log(`   GET /health - Health check`);
     console.log(`👥 Student name tracking enabled`);
