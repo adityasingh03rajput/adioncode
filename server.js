@@ -20,25 +20,20 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// Store users waiting for a match
-let waitingUsers = [];
-// Track basic user profiles by socket id
-const socketIdToUser = new Map();
-// Track pending proposals: key is a sorted pair key "idA|idB"
-const pendingProposals = new Map();
-// Track active confirmed matches: socket id -> partner id
-const activePartners = new Map();
-// Banned ids to prevent them from rejoining
-const bannedIds = new Set();
-// Track active games: socket id -> game data (e.g., Chess instance, TTT board, RPS moves)
-// Each active game actually has two entries (one for each player) pointing to the same game instance.
-const activeGames = new Map();
+// --- Server State Management ---
+let waitingUsers = []; // Array of user objects waiting for a match
+const socketIdToUser = new Map(); // Maps socket.id to full user profile object
+const pendingProposals = new Map(); // Stores pending match proposals: "idA|idB" -> { a, b, aAccepted, bAccepted }
+const activePartners = new Map(); // Stores active chat partners: socket.id -> partner_socket.id
+const bannedIds = new Set(); // Stores socket.ids of banned users
+const activeGames = new Map(); // Stores active game instances: socket.id -> { type, gameInstance, partnerId, ...gameSpecificData }
+
 
 // --- Matchmaking Algorithm ---
 function findMatch(user) {
     console.log(`[Matchmaking] ${user.username} (${user.id}) looking for a match.`);
 
-    // Remove current user from waiting list if they were there (e.g., rejoining after a reject)
+    // Remove current user from waiting list if they were there (e.g., rejoining after a reject or disconnect)
     waitingUsers = waitingUsers.filter(wUser => wUser.id !== user.id);
 
     // If no one else is waiting, add current user to queue
@@ -48,25 +43,26 @@ function findMatch(user) {
         return null;
     }
     
-    // Simple matchmaking: iterate to find a potential match
+    // Iterate through waiting users to find a potential match
     for (let i = 0; i < waitingUsers.length; i++) {
         const potentialMatch = waitingUsers[i];
 
         // Ensure potentialMatch is still connected and not already matched/pending
-        if (!socketIdToUser.has(potentialMatch.id) || activePartners.has(potentialMatch.id)) {
-            console.log(`[Matchmaking] Cleaning up stale user ${potentialMatch.username} (${potentialMatch.id}) from waiting list.`);
+        // If the socket ID is no longer in socketIdToUser, or they are already part of an active conversation,
+        // or they have a pending proposal (meaning they're not truly 'waiting' for a *new* match)
+        if (!socketIdToUser.has(potentialMatch.id) || activePartners.has(potentialMatch.id) || isUserInPendingProposal(potentialMatch.id)) {
+            console.log(`[Matchmaking] Cleaning up stale user ${potentialMatch.username || 'Unknown'} (${potentialMatch.id}) from waiting list.`);
             waitingUsers.splice(i, 1); // Remove stale user
             i--; // Adjust index due to removal
             continue;
         }
 
-        // --- Simple preference-based matching logic (can be expanded) ---
-        // Current logic: 20% chance for same gender, 80% for different.
+        // --- Preference-based matching logic ---
+        // This example implements a 20% chance for same gender, 80% for different.
         const isSameGender = user.gender === potentialMatch.gender;
         const random = Math.random();
         
         if ((isSameGender && random < 0.2) || (!isSameGender && random >= 0.2)) {
-            // Found a match!
             waitingUsers.splice(i, 1); // Remove from waiting list
             console.log(`[Matchmaking] Found potential match: ${user.username} (${user.id}) with ${potentialMatch.username} (${potentialMatch.id}).`);
             return potentialMatch;
@@ -75,8 +71,18 @@ function findMatch(user) {
     
     // If no suitable match found based on preferences, add to queue
     waitingUsers.push(user);
-    console.log(`[Matchmaking] ${user.username} (${user.id}) added to waiting list. No immediate match.`);
+    console.log(`[Matchmaking] ${user.username} (${user.id}) added to waiting list. No immediate match found.`);
     return null;
+}
+
+// Helper to check if a user is part of any pending proposal
+function isUserInPendingProposal(userId) {
+    for (const [key, p] of pendingProposals) {
+        if (p.a === userId || p.b === userId) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // --- Game Logic Helper Functions ---
@@ -120,22 +126,22 @@ io.on('connection', (socket) => {
     
     // Handle a user joining the chat service
     socket.on('join', (userData) => {
-        console.log(`[Join] User ${socket.id} attempting to join with data:`, userData);
+        console.log(`[Join Request] User ${socket.id} attempting to join with data:`, userData);
 
         if (bannedIds.has(socket.id)) {
-            socket.emit('age-restricted'); // Using this event for any ban
-            console.warn(`[Join] Banned user ${socket.id} attempted to join.`);
+            socket.emit('age-restricted'); 
+            console.warn(`[Join Denied] Banned user ${socket.id} attempted to join.`);
             return;
         }
         
         // Enforce age restriction
         if (typeof userData.age !== 'number' || userData.age < 18) {
             socket.emit('age-restricted');
-            console.warn(`[Join] User ${socket.id} (age: ${userData.age}) rejected due to age restriction.`);
+            console.warn(`[Join Denied] User ${socket.id} (age: ${userData.age}) rejected due to age restriction.`);
             return;
         }
 
-        // Store user profile
+        // Store/Update user profile
         const user = {
             id: socket.id,
             username: userData.username,
@@ -146,85 +152,73 @@ io.on('connection', (socket) => {
         };
         socketIdToUser.set(socket.id, user);
 
-        // Clean up any old states for this socket before trying to match
-        activePartners.delete(socket.id);
-        waitingUsers = waitingUsers.filter(wUser => wUser.id !== socket.id);
-        // Clear any pending proposals where this user was involved
-        for (const [key, p] of pendingProposals) {
+        // --- Cleanup any previous states for this socket ---
+        activePartners.delete(socket.id); // Remove from active partners
+        waitingUsers = waitingUsers.filter(wUser => wUser.id !== socket.id); // Remove from waiting list
+        
+        // Remove from any pending proposals and notify counterpart
+        for (const [key, p] of Array.from(pendingProposals.entries())) { // Use Array.from for safe iteration during deletion
             if (p.a === socket.id || p.b === socket.id) {
                 pendingProposals.delete(key);
+                const otherId = p.a === socket.id ? p.b : p.a;
+                if (socketIdToUser.has(otherId)) { // Only notify if other user is still connected
+                    io.to(otherId).emit('match-cancelled');
+                    console.log(`[Join Cleanup] Pending proposal for ${otherId} cancelled due to ${socket.id} joining.`);
+                }
             }
         }
-        // Also clear any active game states for this socket
+
+        // Clear any active game states for this socket and notify partner
         if (activeGames.has(socket.id)) {
             const gameData = activeGames.get(socket.id);
             if (gameData.partnerId && activeGames.has(gameData.partnerId)) {
                 activeGames.delete(gameData.partnerId);
-                io.to(gameData.partnerId).emit('game-ended', { reason: 'Partner started new session' });
-                console.log(`[Join] Notified partner ${gameData.partnerId} that ${socket.id} started a new session.`);
+                io.to(gameData.partnerId).emit('game-ended', { reason: 'Partner started a new session.' });
+                console.log(`[Join Cleanup] Notified partner ${gameData.partnerId} that ${socket.id} started a new session, ending game.`);
             }
             activeGames.delete(socket.id);
         }
 
-        // Try to find a partner
+        // Try to find a new partner
         const partner = findMatch(user);
 
         if (partner) {
-            // Create a pending proposal requiring both users to accept
             const key = [socket.id, partner.id].sort().join('|');
-            pendingProposals.set(key, {
-                a: socket.id,
-                b: partner.id,
-                aAccepted: false,
-                bAccepted: false
-            });
+            pendingProposals.set(key, { a: socket.id, b: partner.id, aAccepted: false, bAccepted: false });
 
-            // Send proposal to both with the other's public profile
             socket.emit('match-found', {
-                id: partner.id,
-                username: partner.username,
-                gender: partner.gender,
-                age: partner.age,
-                about: partner.about,
-                interests: partner.interests
+                id: partner.id, username: partner.username, gender: partner.gender, age: partner.age, about: partner.about, interests: partner.interests
             });
             io.to(partner.id).emit('match-found', {
-                id: user.id,
-                username: user.username,
-                gender: user.gender,
-                age: user.age,
-                about: user.about,
-                interests: user.interests
+                id: user.id, username: user.username, gender: user.gender, age: user.age, about: user.about, interests: user.interests
             });
 
-            console.log(`[Join] Proposed match between ${user.username} (${user.id}) and ${partner.username} (${partner.id}).`);
+            console.log(`[Join Matched] Proposed match between ${user.username} (${user.id}) and ${partner.username} (${partner.id}).`);
         } else {
-            console.log(`[Join] ${user.username} (${user.id}) is waiting for a match.`);
+            console.log(`[Join Waiting] ${user.username} (${user.id}) is waiting for a match.`);
         }
     });
     
-    // Handle incoming chat messages
     socket.on('message', (data) => {
         const partnerId = activePartners.get(socket.id);
         if (!partnerId || partnerId !== data.to) {
-            console.warn(`[Message] User ${socket.id} tried to message non-partner ${data.to}.`);
+            console.warn(`[Message Denied] User ${socket.id} tried to message non-partner ${data.to}.`);
             return;
         }
         socket.to(partnerId).emit('message', {
             message: data.message,
             from: socket.id
         });
-        console.log(`[Message] ${socket.id} sent message to ${partnerId}.`);
+        console.log(`[Message Sent] ${socket.id} sent message to ${partnerId}.`);
     });
     
-    // Handle acceptance of a match proposal
     socket.on('match-accept', ({ partnerId }) => {
         console.log(`[Match Accept] User ${socket.id} accepts match with ${partnerId}.`);
         const key = [socket.id, partnerId].sort().join('|');
         const pending = pendingProposals.get(key);
         
         if (!pending) {
-            console.warn(`[Match Accept] No pending proposal found for ${key}.`);
+            console.warn(`[Match Accept Denied] No pending proposal found for ${key}.`);
             return;
         }
 
@@ -252,31 +246,28 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Handle rejection of a match proposal
     socket.on('match-reject', ({ partnerId }) => {
         console.log(`[Match Reject] User ${socket.id} rejects match with ${partnerId}.`);
         const key = [socket.id, partnerId].sort().join('|');
         const pending = pendingProposals.get(key);
         
         if (!pending) {
-            console.warn(`[Match Reject] No pending proposal found for rejection from ${key}.`);
+            console.warn(`[Match Reject Denied] No pending proposal found for rejection from ${key}.`);
             return;
         }
 
         pendingProposals.delete(key);
         io.to(partnerId).emit('match-cancelled'); // Notify the counterpart
 
-        // Try to re-queue both parties for a new match
         const rejector = socketIdToUser.get(socket.id);
         const counterpart = socketIdToUser.get(partnerId);
 
         const tryRematch = (userToRequeue) => {
             if (!userToRequeue || activePartners.has(userToRequeue.id) || !socketIdToUser.has(userToRequeue.id)) {
-                console.log(`[Match Reject] Skipping requeue for ${userToRequeue?.username || 'Unknown'} (${userToRequeue?.id || 'N/A'}).`);
+                console.log(`[Match Reject] Skipping requeue for ${userToRequeue?.username || 'Unknown'} (${userToRequeue?.id || 'N/A'}) - not connected or already matched.`);
                 return; 
             }
-            // Remove from waiting list just in case, then try to find new match
-            waitingUsers = waitingUsers.filter(wUser => wUser.id !== userToRequeue.id);
+            waitingUsers = waitingUsers.filter(wUser => wUser.id !== userToRequeue.id); // Ensure not already in queue
             const resolved = findMatch(userToRequeue);
             
             if (resolved) {
@@ -298,27 +289,25 @@ io.on('connection', (socket) => {
         tryRematch(counterpart);
     });
 
-    // Handle typing indicators
     socket.on('typing', ({ to, isTyping }) => {
         const partnerId = activePartners.get(socket.id);
         if (!partnerId || partnerId !== to) return;
         socket.to(partnerId).emit('typing', { from: socket.id, isTyping: Boolean(isTyping) });
     });
 
-    // Generic cleanup function for a disconnected socket
+    // --- Generic Cleanup Function for Disconnected Sockets ---
     const cleanupUser = (disconnectedSocketId) => {
         const user = socketIdToUser.get(disconnectedSocketId);
         const username = user ? user.username : 'Unknown';
         console.log(`[Cleanup] Initiating cleanup for ${username} (${disconnectedSocketId}).`);
 
-        // Remove from waiting list
-        waitingUsers = waitingUsers.filter(wUser => wUser.id !== disconnectedSocketId);
+        waitingUsers = waitingUsers.filter(wUser => wUser.id !== disconnectedSocketId); // Remove from waiting list
         
-        // If in a pending proposal, cancel it and notify counterpart
-        for (const [key, p] of pendingProposals) {
+        // Remove from any pending proposals and notify counterpart
+        for (const [key, p] of Array.from(pendingProposals.entries())) {
             if (p.a === disconnectedSocketId || p.b === disconnectedSocketId) {
-                const otherId = p.a === disconnectedSocketId ? p.b : p.a;
                 pendingProposals.delete(key);
+                const otherId = p.a === disconnectedSocketId ? p.b : p.a;
                 if (socketIdToUser.has(otherId)) { // Only notify if other user is still connected
                     io.to(otherId).emit('match-cancelled');
                     console.log(`[Cleanup] Pending proposal for ${otherId} cancelled due to ${disconnectedSocketId} disconnect.`);
@@ -331,7 +320,7 @@ io.on('connection', (socket) => {
         if (partnerId) {
             activePartners.delete(disconnectedSocketId);
             activePartners.delete(partnerId);
-            if (socketIdToUser.has(partnerId)) { // Only notify if partner is still connected
+            if (socketIdToUser.has(partnerId)) {
                 io.to(partnerId).emit('partner-disconnected');
                 console.log(`[Cleanup] Active partner ${partnerId} notified of ${disconnectedSocketId} disconnect.`);
             }
@@ -342,23 +331,21 @@ io.on('connection', (socket) => {
             const game = activeGames.get(disconnectedSocketId);
             activeGames.delete(disconnectedSocketId);
             if (game.partnerId && activeGames.has(game.partnerId)) {
-                activeGames.delete(game.partnerId); // Remove partner's game entry
-                io.to(game.partnerId).emit('game-ended', { reason: 'Partner disconnected' }); // Notify partner
+                activeGames.delete(game.partnerId); 
+                io.to(game.partnerId).emit('game-ended', { reason: 'Partner disconnected' }); 
                 console.log(`[Cleanup] Active game with ${game.partnerId} ended due to ${disconnectedSocketId} disconnect.`);
             }
         }
 
-        socketIdToUser.delete(disconnectedSocketId);
+        socketIdToUser.delete(disconnectedSocketId); // Remove user profile
         console.log(`[Cleanup] Finished cleanup for ${username} (${disconnectedSocketId}).`);
     };
 
-    // User explicitly requests to disconnect from current session/partner
     socket.on('disconnect-me', () => {
         console.log(`[User Action] User ${socket.id} explicitly requested disconnect.`);
         cleanupUser(socket.id);
     });
     
-    // User disconnected (e.g., closed tab, network issue, or server restart)
     socket.on('disconnect', () => {
         console.log(`[Disconnect] User disconnected: ${socket.id}.`);
         cleanupUser(socket.id);
@@ -369,7 +356,7 @@ io.on('connection', (socket) => {
         const follower = socketIdToUser.get(socket.id);
         const partnerId = activePartners.get(socket.id);
         if (!follower || !userId || partnerId !== userId) {
-            console.warn(`[Follow] Invalid follow request from ${socket.id} to ${userId}.`);
+            console.warn(`[Follow Denied] Invalid follow request from ${socket.id} to ${userId}.`);
             return;
         }
         io.to(userId).emit('followed', { by: socket.id, byName: follower.username });
@@ -380,14 +367,13 @@ io.on('connection', (socket) => {
         const follower = socketIdToUser.get(socket.id);
         const partnerId = activePartners.get(socket.id);
         if (!follower || !userId || partnerId !== userId) {
-            console.warn(`[Unfollow] Invalid unfollow request from ${socket.id} to ${userId}.`);
+            console.warn(`[Unfollow Denied] Invalid unfollow request from ${socket.id} to ${userId}.`);
             return;
         }
         io.to(userId).emit('unfollowed', { by: socket.id, byName: follower.username });
         console.log(`[Unfollow] ${follower.username} (${socket.id}) unfollowed ${userId}.`);
     });
 
-    // Handles when an invitee rejects a game invitation (notifies the inviter)
     socket.on('game-invite-rejected', ({ to, type }) => {
         const inviterSocket = to;
         const inviteeUser = socketIdToUser.get(socket.id);
@@ -404,7 +390,7 @@ io.on('connection', (socket) => {
             const gameData = activeGames.get(inviterSocket);
             if (gameData.partnerId === socket.id && gameData.type === type) {
                 activeGames.delete(inviterSocket);
-                activeGames.delete(socket.id); // Also remove acceptor's temporary entry if it exists
+                activeGames.delete(socket.id); // Remove acceptor's temporary entry if it exists
                 console.log(`[Game Cleanup] Cleaned up ${type} game state after rejection.`);
             }
         }
@@ -416,13 +402,13 @@ io.on('connection', (socket) => {
         const user = socketIdToUser.get(socket.id);
         const partnerId = activePartners.get(socket.id);
         if (!user || !to || partnerId !== to) {
-            console.warn(`[Chess Invite] Failed: ${socket.id} not partnered with ${to}.`);
+            console.warn(`[Chess Invite Denied] ${socket.id} not partnered with ${to}.`);
             return;
         }
         
         if (activeGames.has(socket.id) || activeGames.has(to)) {
              socket.emit('game-invite-failed', { message: "You or your partner are already in a game or have a pending invite." });
-             console.warn(`[Chess Invite] Failed: ${socket.id} or ${to} already in a game/pending.`);
+             console.warn(`[Chess Invite Denied] ${socket.id} or ${to} already in a game/pending.`);
              return;
         }
 
@@ -433,7 +419,7 @@ io.on('connection', (socket) => {
             game: gameInstance,
             partnerId: to,
             color: 'white',
-            drawOfferBy: null
+            drawOfferBy: null // No draw offer initially
         });
         
         activeGames.set(to, {
@@ -454,7 +440,7 @@ io.on('connection', (socket) => {
     socket.on('chess-accept', ({ to }) => {
         const partnerId = activePartners.get(socket.id);
         if (!partnerId || partnerId !== to) {
-            console.warn(`[Chess Accept] Failed: ${socket.id} not partnered with ${to}.`);
+            console.warn(`[Chess Accept Denied] ${socket.id} not partnered with ${to}.`);
             return;
         }
         
@@ -462,7 +448,7 @@ io.on('connection', (socket) => {
         const gameDataAcceptor = activeGames.get(socket.id);
         
         if (!gameDataInviter || gameDataInviter.type !== 'chess' || !gameDataAcceptor || gameDataAcceptor.type !== 'chess' || gameDataInviter.game !== gameDataAcceptor.game) {
-            console.warn(`[Chess Accept] Failed: Invalid game data for ${socket.id} and ${to}.`);
+            console.warn(`[Chess Accept Denied] Invalid game data for ${socket.id} and ${to}.`);
             return;
         }
         
@@ -474,7 +460,7 @@ io.on('connection', (socket) => {
     socket.on('chess-move', ({ to, move }) => {
         const partnerId = activePartners.get(socket.id);
         if (!partnerId || partnerId !== to) {
-            console.warn(`[Chess Move] Failed: ${socket.id} not partnered with ${to}.`);
+            console.warn(`[Chess Move Denied] ${socket.id} not partnered with ${to}.`);
             return;
         }
         
@@ -482,14 +468,14 @@ io.on('connection', (socket) => {
         const partnerGameData = activeGames.get(to);
 
         if (!gameData || gameData.type !== 'chess' || !partnerGameData) {
-            console.warn(`[Chess Move] Failed: No valid game data for ${socket.id}.`);
+            console.warn(`[Chess Move Denied] No valid game data for ${socket.id}.`);
             return;
         }
         
         try {
             const currentTurnColor = gameData.game.turn() === 'w' ? 'white' : 'black';
             if (currentTurnColor !== gameData.color) {
-                console.warn(`[Chess Move] Not ${socket.id}'s turn. Current turn: ${currentTurnColor}.`);
+                console.warn(`[Chess Move Denied] Not ${socket.id}'s turn. Current turn: ${currentTurnColor}.`);
                 return;
             }
 
@@ -518,17 +504,17 @@ io.on('connection', (socket) => {
                     activeGames.delete(to);
                 }
             } else {
-                console.warn(`[Chess Move] Invalid move attempted by ${socket.id}:`, move);
+                console.warn(`[Chess Move Denied] Invalid move attempted by ${socket.id}:`, move);
             }
         } catch (e) {
-            console.error(`[Chess Move] Error processing move from ${socket.id}:`, e);
+            console.error(`[Chess Move Error] Error processing move from ${socket.id}:`, e);
         }
     });
 
     socket.on('chess-resign', ({ to }) => {
         const partnerId = activePartners.get(socket.id);
         if (!partnerId || partnerId !== to) {
-            console.warn(`[Chess Resign] Failed: ${socket.id} not partnered with ${to}.`);
+            console.warn(`[Chess Resign Denied] ${socket.id} not partnered with ${to}.`);
             return;
         }
         
@@ -545,28 +531,28 @@ io.on('connection', (socket) => {
         const user = socketIdToUser.get(socket.id);
         const partnerId = activePartners.get(socket.id);
         if (!user || !to || partnerId !== to) {
-            console.warn(`[Chess Draw Offer] Failed: ${socket.id} not partnered with ${to}.`);
+            console.warn(`[Chess Draw Offer Denied] ${socket.id} not partnered with ${to}.`);
             return;
         }
 
         const gameData = activeGames.get(socket.id);
         const partnerGameData = activeGames.get(to);
         if (!gameData || gameData.type !== 'chess' || gameData.game.game_over() || !partnerGameData) {
-            console.warn(`[Chess Draw Offer] Failed: No valid chess game or game over for ${socket.id}.`);
+            console.warn(`[Chess Draw Offer Denied] No valid chess game or game over for ${socket.id}.`);
             return;
         }
 
-        if (gameData.drawOfferBy) { // Already offered a draw
+        if (gameData.drawOfferBy) { 
             console.log(`[Chess Draw Offer] ${socket.id} already has a pending draw offer.`);
             return;
         }
-        if (partnerGameData.drawOfferBy === socket.id) { // Opponent already offered to you
+        if (partnerGameData.drawOfferBy === socket.id) {
             console.log(`[Chess Draw Offer] ${to} already offered draw to ${socket.id}.`);
             return;
         }
 
         gameData.drawOfferBy = socket.id; // Mark that this player offered a draw
-        partnerGameData.drawOfferBy = socket.id; // Mark for partner's game data as well
+        partnerGameData.drawOfferBy = socket.id;
 
         io.to(to).emit('chess-draw-offer', { from: socket.id, byName: user.username });
         console.log(`[Chess Draw Offer] ${user.username} (${socket.id}) offered a draw to ${to}.`);
@@ -575,7 +561,7 @@ io.on('connection', (socket) => {
     socket.on('chess-accept-draw', ({ to }) => {
         const partnerId = activePartners.get(socket.id);
         if (!partnerId || partnerId !== to) {
-            console.warn(`[Chess Draw Accept] Failed: ${socket.id} not partnered with ${to}.`);
+            console.warn(`[Chess Draw Accept Denied] ${socket.id} not partnered with ${to}.`);
             return;
         }
 
@@ -583,12 +569,11 @@ io.on('connection', (socket) => {
         const inviterGameData = activeGames.get(to); // Inviter's game data
 
         if (!gameData || gameData.type !== 'chess' || !inviterGameData || inviterGameData.type !== 'chess') {
-            console.warn(`[Chess Draw Accept] Failed: No valid chess game for ${socket.id} and ${to}.`);
+            console.warn(`[Chess Draw Accept Denied] No valid chess game for ${socket.id} and ${to}.`);
             return;
         }
         
-        // Ensure the draw was offered by the partner (the 'to' player)
-        if (gameData.drawOfferBy === to) {
+        if (gameData.drawOfferBy === to) { // Ensure the draw was offered by the partner
             io.to(socket.id).emit('chess-game-over', { outcome: 'draw' });
             io.to(to).emit('chess-game-over', { outcome: 'draw' });
             console.log(`[Chess End] Chess game between ${socket.id} and ${to} ended in a draw by agreement.`);
@@ -596,14 +581,14 @@ io.on('connection', (socket) => {
             activeGames.delete(socket.id);
             activeGames.delete(to);
         } else {
-            console.warn(`[Chess Draw Accept] Failed: No pending offer from ${to} to ${socket.id}.`);
+            console.warn(`[Chess Draw Accept Denied] No pending offer from ${to} to ${socket.id}.`);
         }
     });
 
     socket.on('chess-reject-draw', ({ to }) => {
         const partnerId = activePartners.get(socket.id);
         if (!partnerId || partnerId !== to) {
-            console.warn(`[Chess Draw Reject] Failed: ${socket.id} not partnered with ${to}.`);
+            console.warn(`[Chess Draw Reject Denied] ${socket.id} not partnered with ${to}.`);
             return;
         }
 
@@ -611,18 +596,17 @@ io.on('connection', (socket) => {
         const inviterGameData = activeGames.get(to); // Inviter's game data
 
         if (!gameData || gameData.type !== 'chess' || !inviterGameData || inviterGameData.type !== 'chess') {
-            console.warn(`[Chess Draw Reject] Failed: No valid chess game for ${socket.id} and ${to}.`);
+            console.warn(`[Chess Draw Reject Denied] No valid chess game for ${socket.id} and ${to}.`);
             return;
         }
 
-        // Ensure the draw was offered by the partner (the 'to' player)
-        if (gameData.drawOfferBy === to) {
+        if (gameData.drawOfferBy === to) { // Ensure the draw was offered by the partner
             gameData.drawOfferBy = null; // Clear offer for rejector
             inviterGameData.drawOfferBy = null; // Clear offer for inviter
             io.to(to).emit('chess-draw-rejected', { from: socket.id, byName: socketIdToUser.get(socket.id)?.username || 'Opponent' });
             console.log(`[Chess Draw Reject] ${socket.id} rejected draw offer from ${to}.`);
         } else {
-            console.warn(`[Chess Draw Reject] Failed: No pending offer from ${to} to ${socket.id}.`);
+            console.warn(`[Chess Draw Reject Denied] No pending offer from ${to} to ${socket.id}.`);
         }
     });
 
@@ -632,13 +616,13 @@ io.on('connection', (socket) => {
         const user = socketIdToUser.get(socket.id);
         const partnerId = activePartners.get(socket.id);
         if (!user || !to || partnerId !== to) {
-            console.warn(`[TTT Invite] Failed: ${socket.id} not partnered with ${to}.`);
+            console.warn(`[TTT Invite Denied] ${socket.id} not partnered with ${to}.`);
             return;
         }
         
         if (activeGames.has(socket.id) || activeGames.has(to)) {
              socket.emit('game-invite-failed', { message: "You or your partner are already in a game or have a pending invite." });
-             console.warn(`[TTT Invite] Failed: ${socket.id} or ${to} already in a game/pending.`);
+             console.warn(`[TTT Invite Denied] ${socket.id} or ${to} already in a game/pending.`);
              return;
         }
 
@@ -671,7 +655,7 @@ io.on('connection', (socket) => {
     socket.on('ttt-accept', ({ to }) => {
         const partnerId = activePartners.get(socket.id);
         if (!partnerId || partnerId !== to) {
-            console.warn(`[TTT Accept] Failed: ${socket.id} not partnered with ${to}.`);
+            console.warn(`[TTT Accept Denied] ${socket.id} not partnered with ${to}.`);
             return;
         }
         
@@ -679,7 +663,7 @@ io.on('connection', (socket) => {
         const gameDataAcceptor = activeGames.get(socket.id);
         
         if (!gameDataInviter || gameDataInviter.type !== 'ttt' || !gameDataAcceptor || gameDataAcceptor.type !== 'ttt' || gameDataInviter.board !== gameDataAcceptor.board) {
-            console.warn(`[TTT Accept] Failed: Invalid game data for ${socket.id} and ${to}.`);
+            console.warn(`[TTT Accept Denied] Invalid game data for ${socket.id} and ${to}.`);
             return;
         }
         
@@ -699,7 +683,7 @@ io.on('connection', (socket) => {
     socket.on('ttt-move', ({ to, idx }) => {
         const partnerId = activePartners.get(socket.id);
         if (!partnerId || partnerId !== to) {
-            console.warn(`[TTT Move] Failed: ${socket.id} not partnered with ${to}.`);
+            console.warn(`[TTT Move Denied] ${socket.id} not partnered with ${to}.`);
             return;
         }
         
@@ -707,21 +691,18 @@ io.on('connection', (socket) => {
         const partnerGameData = activeGames.get(to);
 
         if (!gameData || gameData.type !== 'ttt' || !partnerGameData) {
-            console.warn(`[TTT Move] Failed: No valid game data for ${socket.id}.`);
+            console.warn(`[TTT Move Denied] No valid game data for ${socket.id}.`);
             return;
         }
         
-        // Validate move: check if cell is empty, idx is valid, and it's the player's turn
         if (gameData.board[idx] !== '' || idx < 0 || idx > 8 || gameData.currentTurn !== gameData.mark) {
-            console.warn(`[TTT Move] Invalid move by ${socket.id}: idx=${idx}, currentTurn=${gameData.currentTurn}, playerMark=${gameData.mark}.`);
+            console.warn(`[TTT Move Denied] Invalid move by ${socket.id}: idx=${idx}, currentTurn=${gameData.currentTurn}, playerMark=${gameData.mark}.`);
             return;
         }
         
-        // Make the move on the shared board
         gameData.board[idx] = gameData.mark;
         console.log(`[TTT Move] ${socket.id} (mark: ${gameData.mark}) moved to idx ${idx}.`);
         
-        // Check for winner after the move
         const winner = checkTicTacToeWinner(gameData.board);
 
         if (winner) {
@@ -735,14 +716,11 @@ io.on('connection', (socket) => {
             activeGames.delete(socket.id);
             activeGames.delete(to);
         } else {
-            // No winner yet, switch turn
             gameData.currentTurn = (gameData.mark === 'X' ? 'O' : 'X');
             partnerGameData.currentTurn = gameData.currentTurn;
 
-            // Send move to partner (to update their board)
             io.to(to).emit('ttt-move', { idx, mark: gameData.mark });
             
-            // Update turn for both players
             io.to(socket.id).emit('ttt-update-turn', { currentTurn: gameData.currentTurn, yourMark: gameData.mark });
             io.to(to).emit('ttt-update-turn', { currentTurn: partnerGameData.currentTurn, yourMark: partnerGameData.mark });
         }
@@ -751,7 +729,7 @@ io.on('connection', (socket) => {
     socket.on('ttt-reset', ({ to }) => {
         const partnerId = activePartners.get(socket.id);
         if (!partnerId || partnerId !== to) {
-            console.warn(`[TTT Reset] Failed: ${socket.id} not partnered with ${to}.`);
+            console.warn(`[TTT Reset Denied] ${socket.id} not partnered with ${to}.`);
             return;
         }
         
@@ -759,12 +737,12 @@ io.on('connection', (socket) => {
         const partnerGameData = activeGames.get(to);
 
         if (!gameData || gameData.type !== 'ttt' || !partnerGameData) {
-            console.warn(`[TTT Reset] Failed: No valid game data for ${socket.id}.`);
+            console.warn(`[TTT Reset Denied] No valid game data for ${socket.id}.`);
             return;
         }
         
         const newBoard = ['', '', '', '', '', '', '', '', ''];
-        gameData.board.splice(0, gameData.board.length, ...newBoard); // Modify in place
+        gameData.board.splice(0, gameData.board.length, ...newBoard); 
         partnerGameData.board.splice(0, partnerGameData.board.length, ...newBoard);
 
         gameData.currentTurn = 'X';
@@ -783,13 +761,13 @@ io.on('connection', (socket) => {
         const user = socketIdToUser.get(socket.id);
         const partnerId = activePartners.get(socket.id);
         if (!user || !to || partnerId !== to) {
-            console.warn(`[RPS Invite] Failed: ${socket.id} not partnered with ${to}.`);
+            console.warn(`[RPS Invite Denied] ${socket.id} not partnered with ${to}.`);
             return;
         }
         
         if (activeGames.has(socket.id) || activeGames.has(to)) {
              socket.emit('game-invite-failed', { message: "You or your partner are already in a game or have a pending invite." });
-             console.warn(`[RPS Invite] Failed: ${socket.id} or ${to} already in a game/pending.`);
+             console.warn(`[RPS Invite Denied] ${socket.id} or ${to} already in a game/pending.`);
              return;
         }
 
@@ -815,7 +793,7 @@ io.on('connection', (socket) => {
     socket.on('rps-accept', ({ to }) => {
         const partnerId = activePartners.get(socket.id);
         if (!partnerId || partnerId !== to) {
-            console.warn(`[RPS Accept] Failed: ${socket.id} not partnered with ${to}.`);
+            console.warn(`[RPS Accept Denied] ${socket.id} not partnered with ${to}.`);
             return;
         }
         
@@ -823,7 +801,7 @@ io.on('connection', (socket) => {
         const gameDataAcceptor = activeGames.get(socket.id);
         
         if (!gameDataInviter || gameDataInviter.type !== 'rps' || !gameDataAcceptor || gameDataAcceptor.type !== 'rps') {
-            console.warn(`[RPS Accept] Failed: Invalid game data for ${socket.id} and ${to}.`);
+            console.warn(`[RPS Accept Denied] Invalid game data for ${socket.id} and ${to}.`);
             return;
         }
         
@@ -835,13 +813,13 @@ io.on('connection', (socket) => {
     socket.on('rps-move', ({ to, move }) => {
         const partnerId = activePartners.get(socket.id);
         if (!partnerId || partnerId !== to) {
-            console.warn(`[RPS Move] Failed: ${socket.id} not partnered with ${to}.`);
+            console.warn(`[RPS Move Denied] ${socket.id} not partnered with ${to}.`);
             return;
         }
         
         const gameData = activeGames.get(socket.id);
         if (!gameData || gameData.type !== 'rps' || gameData.move !== null) {
-            console.warn(`[RPS Move] Failed: ${socket.id} already moved or not in game.`);
+            console.warn(`[RPS Move Denied] ${socket.id} already moved or not in game.`);
             return;
         }
         
@@ -886,7 +864,7 @@ io.on('connection', (socket) => {
 // --- Admin Namespace for Monitoring and Management ---
 const adminNs = io.of('/admin');
 adminNs.on('connection', (adminSocket) => {
-    console.log(`[Admin] Admin connected: ${adminSocket.id}`);
+    console.log(`[Admin Connect] Admin connected: ${adminSocket.id}`);
 
     const listPairs = () => {
         const result = [];
@@ -914,48 +892,47 @@ adminNs.on('connection', (adminSocket) => {
     adminSocket.on('admin:list', () => {
         listPairs();
         listBanned();
-        console.log(`[Admin] Admin ${adminSocket.id} requested lists.`);
+        console.log(`[Admin Action] Admin ${adminSocket.id} requested lists.`);
     });
 
     adminSocket.on('admin:terminate', ({ id1, id2 }) => {
         if (!id1 || !id2) {
-            console.warn(`[Admin] Invalid terminate request from ${adminSocket.id}.`);
+            console.warn(`[Admin Action] Invalid terminate request from ${adminSocket.id}.`);
             return;
         }
         if (activePartners.get(id1) === id2 && activePartners.get(id2) === id1) {
-            console.log(`[Admin] Admin ${adminSocket.id} terminated chat between ${id1} and ${id2}.`);
-            // Clean up both users explicitly
+            console.log(`[Admin Action] Admin ${adminSocket.id} terminated chat between ${id1} and ${id2}.`);
             cleanupUser(id1); 
             cleanupUser(id2);
-            io.to(id1).emit('partner-disconnected'); // Ensure both clients are notified
+            io.to(id1).emit('partner-disconnected');
             io.to(id2).emit('partner-disconnected');
         } else {
-            console.warn(`[Admin] Terminate failed: ${id1} and ${id2} are not active partners.`);
+            console.warn(`[Admin Action] Terminate failed: ${id1} and ${id2} are not active partners.`);
         }
         listPairs();
     });
 
     adminSocket.on('admin:ban', ({ id }) => {
         if (!id) {
-            console.warn(`[Admin] Invalid ban request from ${adminSocket.id}.`);
+            console.warn(`[Admin Action] Invalid ban request from ${adminSocket.id}.`);
             return;
         }
         if (!bannedIds.has(id)) {
             bannedIds.add(id);
-            console.log(`[Admin] Admin ${adminSocket.id} banned user: ${id}.`);
-            io.to(id).disconnectSockets(true); // Force disconnect the banned user
-            cleanupUser(id); // Immediately clean up their state
+            console.log(`[Admin Action] Admin ${adminSocket.id} banned user: ${id}.`);
+            io.to(id).disconnectSockets(true);
+            cleanupUser(id);
         }
         listBanned();
     });
     
     adminSocket.on('admin:unban', ({ id }) => {
         if (!id) {
-            console.warn(`[Admin] Invalid unban request from ${adminSocket.id}.`);
+            console.warn(`[Admin Action] Invalid unban request from ${adminSocket.id}.`);
             return;
         }
         if (bannedIds.delete(id)) {
-            console.log(`[Admin] Admin ${adminSocket.id} unbanned user: ${id}.`);
+            console.log(`[Admin Action] Admin ${adminSocket.id} unbanned user: ${id}.`);
         }
         listBanned();
     });
@@ -965,9 +942,9 @@ adminNs.on('connection', (adminSocket) => {
             waitingUsers: waitingUsers.length,
             activePairs: new Set(Array.from(activePartners.values())).size, 
             pendingProposals: pendingProposals.size,
-            activeGames: new Set(Array.from(activeGames.values()).map(game => game.game || game.board || game.partnerId)).size, // Counting unique game instances
+            activeGames: new Set(Array.from(activeGames.values()).map(game => game.game || game.board || game.partnerId)).size,
             bannedUsers: bannedIds.size,
-            connectedSockets: io.of('/').sockets.size // Total sockets connected to the default namespace
+            connectedSockets: io.of('/').sockets.size 
         };
         adminSocket.emit('admin:stats', stats);
     });
@@ -986,7 +963,7 @@ adminNs.on('connection', (adminSocket) => {
     }, 5000);
 
     adminSocket.on('disconnect', () => {
-        console.log(`[Admin] Admin disconnected: ${adminSocket.id}.`);
+        console.log(`[Admin Disconnect] Admin disconnected: ${adminSocket.id}.`);
         clearInterval(adminInterval);
     });
 });
