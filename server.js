@@ -1,773 +1,531 @@
+require('dotenv').config();
 const express = require('express');
+const http = require('http');
+const socketIo = require('socket.io');
+const path = require('path');
+const { createClient } = require('@supabase/supabase-js');
+const rateLimit = require('express-rate-limit');
+const helmet = require('helmet');
 const cors = require('cors');
+const morgan = require('morgan');
+const jwt = require('jsonwebtoken');
+const { v4: uuidv4 } = require('uuid');
+const { WebSocketServer } = require('ws');
+const { createAdapter } = require('@socket.io/redis-adapter');
+const { createClient: createRedisClient } = require('redis');
+const multer = require('multer');
+const fs = require('fs');
+const crypto = require('crypto');
 
+// Initialize Express app
 const app = express();
-const PORT = process.env.PORT || 3000;
+const server = http.createServer(app);
 
-// Middleware
-app.use(cors());
-app.use(express.json());
+// Security Middleware
+app.use(helmet());
+app.use(cors({
+  origin: process.env.NODE_ENV === 'production' 
+    ? ['https://intro-vert.netlify.app', 'https://introvert-chat.vercel.app']
+    : 'http://localhost:3000',
+  credentials: true
+}));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// In-memory storage for device timers and BSSID management
-let deviceTimers = new Map();
-// Support multiple authorized BSSIDs
-let authorizedBSSIDs = ['2a:d0:43:d1:34:bf']; // Array of authorized BSSIDs
-let bssidHistory = []; // Store BSSID change history
+// Logging
+if (process.env.NODE_ENV === 'development') {
+  app.use(morgan('dev'));
+}
 
-// Device timer states
-const TIMER_STATES = {
-    RUNNING: 'running',
-    PAUSED: 'paused',
-    COMPLETED: 'completed',
-    STOPPED: 'stopped'
-};
-
-// Health check endpoint
-app.get('/health', (req, res) => {
-    res.json({
-        status: 'OK',
-        timestamp: new Date().toISOString(),
-        version: '1.0.0',
-        uptime: process.uptime(),
-        activeDevices: deviceTimers.size
-    });
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
+  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100,
+  message: 'Too many requests, please try again later.'
 });
+app.use(limiter);
 
-// Start timer for a device
-app.post('/api/timer/start', (req, res) => {
-    try {
-        const { deviceId, bssid, studentName } = req.body;
-
-        console.log(`🟢 Timer START request: Device ${deviceId} at BSSID ${bssid}, Student: ${studentName || 'Anonymous'}`);
-
-        // Validate required BSSID (check against multiple authorized BSSIDs)
-        if (!authorizedBSSIDs.includes(bssid)) {
-            return res.status(403).json({
-                success: false,
-                message: `Timer can only be started on authorized networks: ${authorizedBSSIDs.join(', ')}`
-            });
-        }
-
-        if (!deviceId) {
-            return res.status(400).json({
-                success: false,
-                message: 'Device ID is required'
-            });
-        }
-
-        // Create or update timer entry with student name
-        const timerData = {
-            deviceId: deviceId,
-            bssid: bssid,
-            studentName: studentName || 'Anonymous',
-            state: TIMER_STATES.RUNNING,
-            startTime: new Date().toISOString(),
-            lastUpdate: new Date().toISOString(),
-            totalDuration: 0,
-            pausedDuration: 0
-        };
-
-        deviceTimers.set(deviceId, timerData);
-
-        console.log(`✅ Timer started for device: ${deviceId}, Student: ${timerData.studentName}`);
-
-        res.json({
-            success: true,
-            message: `Timer started successfully for ${timerData.studentName}`,
-            deviceId: deviceId,
-            studentName: timerData.studentName,
-            state: TIMER_STATES.RUNNING,
-            startTime: timerData.startTime
-        });
-
-    } catch (error) {
-        console.error('Timer start error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Internal server error'
-        });
+// File upload configuration
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadDir = process.env.UPLOAD_DIR || './uploads';
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
     }
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+    const ext = path.extname(file.originalname);
+    cb(null, `${file.fieldname}-${uniqueSuffix}${ext}`);
+  }
 });
 
-// Pause timer for a device
-app.post('/api/timer/pause', (req, res) => {
-    try {
-        const { deviceId } = req.body;
-
-        console.log(`⏸️ Timer PAUSE request: Device ${deviceId}`);
-
-        if (!deviceId) {
-            return res.status(400).json({
-                success: false,
-                message: 'Device ID is required'
-            });
-        }
-
-        const timerData = deviceTimers.get(deviceId);
-        if (!timerData) {
-            return res.status(404).json({
-                success: false,
-                message: 'Timer not found for this device'
-            });
-        }
-
-        // Update timer state
-        timerData.state = TIMER_STATES.PAUSED;
-        timerData.lastUpdate = new Date().toISOString();
-
-        deviceTimers.set(deviceId, timerData);
-
-        console.log(`⏸️ Timer paused for device: ${deviceId}`);
-
-        res.json({
-            success: true,
-            message: 'Timer paused successfully',
-            deviceId: deviceId,
-            state: TIMER_STATES.PAUSED
-        });
-
-    } catch (error) {
-        console.error('Timer pause error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Internal server error'
-        });
+const upload = multer({
+  storage,
+  limits: { fileSize: parseInt(process.env.MAX_FILE_SIZE) || 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = (process.env.ALLOWED_FILE_TYPES || '').split(',');
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('File type not allowed'), false);
     }
+  }
 });
 
-// Resume timer for a device
-app.post('/api/timer/resume', (req, res) => {
-    try {
-        const { deviceId } = req.body;
-
-        console.log(`▶️ Timer RESUME request: Device ${deviceId}`);
-
-        if (!deviceId) {
-            return res.status(400).json({
-                success: false,
-                message: 'Device ID is required'
-            });
+// Initialize Supabase
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_ANON_KEY,
+  {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+      storage: {
+        getItem: (key) => {
+          const item = localStorage.getItem(key);
+          return item ? JSON.parse(item) : null;
+        },
+        setItem: (key, value) => {
+          localStorage.setItem(key, JSON.stringify(value));
+        },
+        removeItem: (key) => {
+          localStorage.removeItem(key);
         }
-
-        const timerData = deviceTimers.get(deviceId);
-        if (!timerData) {
-            return res.status(404).json({
-                success: false,
-                message: 'Timer not found for this device'
-            });
-        }
-
-        // Update timer state
-        timerData.state = TIMER_STATES.RUNNING;
-        timerData.lastUpdate = new Date().toISOString();
-
-        deviceTimers.set(deviceId, timerData);
-
-        console.log(`▶️ Timer resumed for device: ${deviceId}`);
-
-        res.json({
-            success: true,
-            message: 'Timer resumed successfully',
-            deviceId: deviceId,
-            state: TIMER_STATES.RUNNING
-        });
-
-    } catch (error) {
-        console.error('Timer resume error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Internal server error'
-        });
+      }
     }
-});
+  }
+);
 
-// Stop/Complete timer for a device
-app.post('/api/timer/stop', (req, res) => {
-    try {
-        const { deviceId, duration } = req.body;
+// Initialize Redis for pub/sub and rate limiting
+let pubClient, subClient, redisClient;
 
-        console.log(`🛑 Timer STOP request: Device ${deviceId}, Duration: ${duration}`);
-
-        if (!deviceId) {
-            return res.status(400).json({
-                success: false,
-                message: 'Device ID is required'
-            });
+async function initializeRedis() {
+  try {
+    if (process.env.REDIS_URL) {
+      redisClient = createRedisClient({
+        url: process.env.REDIS_URL,
+        socket: {
+          reconnectStrategy: (retries) => Math.min(retries * 100, 5000)
         }
-
-        const timerData = deviceTimers.get(deviceId);
-        if (!timerData) {
-            return res.status(404).json({
-                success: false,
-                message: 'Timer not found for this device'
-            });
-        }
-
-        // Update timer state
-        timerData.state = TIMER_STATES.COMPLETED;
-        timerData.lastUpdate = new Date().toISOString();
-        timerData.totalDuration = duration || 0;
-        timerData.endTime = new Date().toISOString();
-
-        deviceTimers.set(deviceId, timerData);
-
-        console.log(`🛑 Timer completed for device: ${deviceId}, Duration: ${duration} seconds`);
-
-        res.json({
-            success: true,
-            message: 'Timer completed successfully',
-            deviceId: deviceId,
-            state: TIMER_STATES.COMPLETED,
-            totalDuration: timerData.totalDuration
-        });
-
-    } catch (error) {
-        console.error('Timer stop error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Internal server error'
-        });
+      });
+      
+      await redisClient.connect();
+      console.log('Connected to Redis');
+      
+      pubClient = redisClient.duplicate();
+      subClient = redisClient.duplicate();
+      
+      await Promise.all([pubClient.connect(), subClient.connect()]);
+      
+      return { pubClient, subClient, redisClient };
     }
+  } catch (error) {
+    console.error('Redis connection error:', error);
+    return { pubClient: null, subClient: null, redisClient: null };
+  }
+  return { pubClient: null, subClient: null, redisClient: null };
+}
+
+// Initialize Socket.IO with Redis adapter
+const io = socketIo(server, {
+  cors: {
+    origin: process.env.NODE_ENV === 'production' 
+      ? ['https://intro-vert.netlify.app', 'https://introvert-chat.vercel.app']
+      : 'http://localhost:3000',
+    methods: ['GET', 'POST'],
+    credentials: true
+  },
+  transports: ['websocket', 'polling'],
+  pingTimeout: 10000,
+  pingInterval: 5000,
+  maxHttpBufferSize: 1e8 // 100MB
 });
 
-// Update timer status (heartbeat)
-app.post('/api/timer/update', (req, res) => {
-    try {
-        const { deviceId, duration, state } = req.body;
+// Initialize Redis adapter if available
+initializeRedis().then(({ pubClient, subClient }) => {
+  if (pubClient && subClient) {
+    io.adapter(createAdapter(pubClient, subClient));
+    console.log('Using Redis adapter for Socket.IO');
+  } else {
+    console.log('Using in-memory adapter for Socket.IO');
+  }
+});
 
-        if (!deviceId) {
-            return res.status(400).json({
-                success: false,
-                message: 'Device ID is required'
-            });
-        }
+// Data structures for in-memory storage
+const waitingUsers = [];
+const socketIdToUser = new Map();
+const pendingProposals = new Map();
+const activePartners = new Map();
+const userPresence = new Map();
+const userSockets = new Map();
+const blockedUsers = new Map();
+const reportedUsers = new Map();
+const typingUsers = new Map();
+const onlineUsers = new Set();
+const userRooms = new Map();
+const groupChats = new Map();
 
-        const timerData = deviceTimers.get(deviceId);
-        if (!timerData) {
-            return res.status(404).json({
-                success: false,
-                message: 'Timer not found for this device'
-            });
-        }
+// End-to-end encryption setup
+const algorithm = 'aes-256-gcm';
+const IV_LENGTH = 16;
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || crypto.randomBytes(32).toString('hex');
 
-        // Update timer data
-        timerData.lastUpdate = new Date().toISOString();
-        if (duration !== undefined) timerData.totalDuration = duration;
-        if (state) timerData.state = state;
+function encrypt(text) {
+  const iv = crypto.randomBytes(IV_LENGTH);
+  const cipher = crypto.createCipheriv(algorithm, Buffer.from(ENCRYPTION_KEY), iv);
+  let encrypted = cipher.update(text, 'utf8', 'hex');
+  encrypted += cipher.final('hex');
+  const authTag = cipher.getAuthTag();
+  return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted}`;
+}
 
-        deviceTimers.set(deviceId, timerData);
+function decrypt(text) {
+  const [ivString, authTagString, encryptedText] = text.split(':');
+  const iv = Buffer.from(ivString, 'hex');
+  const authTag = Buffer.from(authTagString, 'hex');
+  const decipher = crypto.createDecipheriv(algorithm, Buffer.from(ENCRYPTION_KEY), iv);
+  decipher.setAuthTag(authTag);
+  let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
+  decrypted += decipher.final('utf8');
+  return decrypted;
+}
 
-        res.json({
-            success: true,
-            message: 'Timer updated successfully',
-            deviceId: deviceId
-        });
+// JWT Authentication
+function generateToken(user) {
+  return jwt.sign(
+    { 
+      id: user.id, 
+      username: user.username,
+      email: user.email 
+    },
+    process.env.JWT_SECRET,
+    { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+  );
+}
 
-    } catch (error) {
-        console.error('Timer update error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Internal server error'
-        });
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  
+  if (!token) return res.sendStatus(401);
+
+  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+    if (err) return res.sendStatus(403);
+    req.user = user;
+    next();
+  });
+}
+
+// Serve static files
+app.use(express.static(path.join(__dirname, 'public'), {
+  maxAge: '1y',
+  etag: true,
+  lastModified: true,
+  setHeaders: (res, path) => {
+    if (path.endsWith('.html')) {
+      res.setHeader('Cache-Control', 'no-cache');
     }
-});
+  }
+}));
 
-// Get all active timers (for teacher dashboard)
-app.get('/api/timers/all', (req, res) => {
-    try {
-        console.log(`📊 All timers request - Total devices: ${deviceTimers.size}`);
-
-        const allTimers = Array.from(deviceTimers.values()).map(timer => ({
-            deviceId: timer.deviceId,
-            studentName: timer.studentName || 'Anonymous',
-            state: timer.state,
-            startTime: timer.startTime,
-            lastUpdate: timer.lastUpdate,
-            totalDuration: timer.totalDuration,
-            bssid: timer.bssid,
-            endTime: timer.endTime || null
-        }));
-
-        // Group by state for easy dashboard display
-        const timersByState = {
-            running: allTimers.filter(t => t.state === TIMER_STATES.RUNNING),
-            paused: allTimers.filter(t => t.state === TIMER_STATES.PAUSED),
-            completed: allTimers.filter(t => t.state === TIMER_STATES.COMPLETED),
-            total: allTimers.length
-        };
-
-        // Log student names for debugging
-        const studentNames = allTimers.map(t => `${t.studentName} (${t.state})`).join(', ');
-        console.log(`👥 Active students: ${studentNames || 'None'}`);
-
-        res.json({
-            success: true,
-            timers: allTimers,
-            summary: timersByState,
-            timestamp: new Date().toISOString()
-        });
-
-    } catch (error) {
-        console.error('Get all timers error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Internal server error'
-        });
+// Matchmaking algorithm
+function findMatch(user) {
+    // If no one is waiting, add to queue
+    if (waitingUsers.length === 0) {
+        waitingUsers.push(user);
+        return null;
     }
-});
-
-// Get timer status for specific device
-app.get('/api/timer/:deviceId', (req, res) => {
-    try {
-        const { deviceId } = req.params;
-
-        const timerData = deviceTimers.get(deviceId);
-        if (!timerData) {
-            return res.status(404).json({
-                success: false,
-                message: 'Timer not found for this device'
-            });
-        }
-
-        res.json({
-            success: true,
-            timer: {
-                deviceId: timerData.deviceId,
-                studentName: timerData.studentName || 'Anonymous',
-                state: timerData.state,
-                startTime: timerData.startTime,
-                lastUpdate: timerData.lastUpdate,
-                totalDuration: timerData.totalDuration,
-                bssid: timerData.bssid,
-                endTime: timerData.endTime || null
-            }
-        });
-
-    } catch (error) {
-        console.error('Get timer error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Internal server error'
-        });
-    }
-});
-
-// Clear completed timers (cleanup endpoint)
-app.delete('/api/timers/cleanup', (req, res) => {
-    try {
-        const beforeCount = deviceTimers.size;
-
-        // Remove completed timers older than 24 hours
-        const cutoffTime = new Date(Date.now() - 24 * 60 * 60 * 1000);
-
-        for (const [deviceId, timer] of deviceTimers.entries()) {
-            if (timer.state === TIMER_STATES.COMPLETED &&
-                new Date(timer.lastUpdate) < cutoffTime) {
-                deviceTimers.delete(deviceId);
-            }
-        }
-
-        const afterCount = deviceTimers.size;
-        const cleanedCount = beforeCount - afterCount;
-
-        console.log(`🧹 Cleanup completed: Removed ${cleanedCount} old timers`);
-
-        res.json({
-            success: true,
-            message: `Cleanup completed: Removed ${cleanedCount} old timers`,
-            remainingTimers: afterCount
-        });
-
-    } catch (error) {
-        console.error('Cleanup error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Internal server error'
-        });
-    }
-});
-
-// Clear all completed timers (for teacher dashboard)
-app.post('/api/timers/clear-completed', (req, res) => {
-    try {
-        const beforeCount = deviceTimers.size;
-        const completedTimers = [];
-
-        // Remove all completed timers
-        for (const [deviceId, timer] of deviceTimers.entries()) {
-            if (timer.state === TIMER_STATES.COMPLETED) {
-                completedTimers.push(`${timer.studentName || 'Anonymous'} (${timer.deviceId})`);
-                deviceTimers.delete(deviceId);
-            }
-        }
-
-        const afterCount = deviceTimers.size;
-        const cleanedCount = beforeCount - afterCount;
-
-        console.log(`🧹 Teacher cleared ${cleanedCount} completed timers: ${completedTimers.join(', ')}`);
-
-        res.json({
-            success: true,
-            message: `Cleared ${cleanedCount} completed timers`,
-            clearedTimers: completedTimers,
-            remainingTimers: afterCount
-        });
-
-    } catch (error) {
-        console.error('Clear completed timers error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Internal server error'
-        });
-    }
-});
-
-// BSSID Management Endpoints
-
-// Get current authorized BSSID
-app.get('/api/bssid/current', (req, res) => {
-    try {
-        console.log(`📡 BSSID request - Current authorized BSSIDs: ${authorizedBSSIDs.join(', ')}`);
-
-        res.json({
-            success: true,
-            bssids: authorizedBSSIDs,
-            primaryBSSID: authorizedBSSIDs[0], // For backward compatibility
-            bssid: authorizedBSSIDs[0], // For backward compatibility
-            count: authorizedBSSIDs.length,
-            timestamp: new Date().toISOString(),
-            message: 'Current authorized BSSIDs retrieved successfully'
-        });
-
-    } catch (error) {
-        console.error('Get BSSID error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Internal server error'
-        });
-    }
-});
-
-// Update authorized BSSID
-app.post('/api/bssid/update', (req, res) => {
-    try {
-        const { bssid, description, updatedBy } = req.body;
-
-        console.log(`👑 BSSID UPDATE request: ${bssid} by ${updatedBy || 'Unknown'}`);
-
-        if (!bssid) {
-            return res.status(400).json({
-                success: false,
-                message: 'BSSID is required'
-            });
-        }
-
-        // Accept any BSSID format (MAC address, IP address, or custom identifier)
-        if (!bssid || bssid.trim().length === 0) {
-            return res.status(400).json({
-                success: false,
-                message: 'BSSID cannot be empty'
-            });
-        }
-
-        // Store old BSSIDs for history
-        const oldBSSIDs = [...authorizedBSSIDs];
-
-        // Update primary BSSID (replace first one or add if not exists)
-        if (authorizedBSSIDs.length > 0) {
-            authorizedBSSIDs[0] = bssid;
-        } else {
-            authorizedBSSIDs.push(bssid);
-        }
-
-        // Add to history
-        const historyEntry = {
-            oldBSSIDs: oldBSSIDs,
-            newBSSIDs: [...authorizedBSSIDs],
-            action: 'update_primary',
-            description: description || 'Primary BSSID updated via API',
-            updatedBy: updatedBy || 'API',
-            timestamp: new Date().toISOString()
-        };
-
-        bssidHistory.push(historyEntry);
-
-        // Keep only last 100 history entries
-        if (bssidHistory.length > 100) {
-            bssidHistory = bssidHistory.slice(-100);
-        }
-
-        console.log(`✅ Primary BSSID updated: ${oldBSSIDs[0]} → ${bssid}`);
-
-        res.json({
-            success: true,
-            message: 'Primary BSSID updated successfully',
-            oldBSSIDs: oldBSSIDs,
-            newBSSIDs: [...authorizedBSSIDs],
-            primaryBSSID: bssid,
-            timestamp: new Date().toISOString()
-        });
-
-    } catch (error) {
-        console.error('Update BSSID error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Internal server error'
-        });
-    }
-});
-
-// Get BSSID change history
-app.get('/api/bssid/history', (req, res) => {
-    try {
-        console.log(`📋 BSSID history request - ${bssidHistory.length} entries`);
-
-        res.json({
-            success: true,
-            history: bssidHistory,
-            currentBSSIDs: authorizedBSSIDs,
-            primaryBSSID: authorizedBSSIDs[0],
-            totalEntries: bssidHistory.length,
-            timestamp: new Date().toISOString()
-        });
-
-    } catch (error) {
-        console.error('Get BSSID history error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Internal server error'
-        });
-    }
-});
-
-// Add new authorized BSSID
-app.post('/api/bssid/add', (req, res) => {
-    try {
-        const { bssid, description, updatedBy } = req.body;
-
-        console.log(`➕ BSSID ADD request: ${bssid} by ${updatedBy || 'Unknown'}`);
-
-        if (!bssid) {
-            return res.status(400).json({
-                success: false,
-                message: 'BSSID is required'
-            });
-        }
-
-        // Validate BSSID format (MAC address or IP address)
-        const macRegex = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/;
-        const ipRegex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+    
+    // Try to find a match based on gender preferences
+    for (let i = 0; i < waitingUsers.length; i++) {
+        const potentialMatch = waitingUsers[i];
+        const random = Math.random();
         
-        // Accept any BSSID format (MAC address, IP address, or custom identifier)
-        if (!bssid || bssid.trim().length === 0) {
-            return res.status(400).json({
-                success: false,
-                message: 'BSSID cannot be empty'
-            });
+        // 20% chance for same gender, 80% for different
+        const isSameGender = user.gender === potentialMatch.gender;
+        
+        if ((isSameGender && random < 0.2) || (!isSameGender && random >= 0.2)) {
+            // Remove from waiting list
+            waitingUsers.splice(i, 1);
+            return potentialMatch;
+        }
+    }
+    
+    // If no match found, add to queue
+    waitingUsers.push(user);
+    return null;
+}
+
+io.on('connection', (socket) => {
+    console.log('User connected:', socket.id);
+    
+    socket.on('join', (userData) => {
+        // Enforce age restriction if provided
+        if (typeof userData.age === 'number' && userData.age < 18) {
+            socket.emit('age-restricted');
+            return;
         }
 
-        // Check if BSSID already exists
-        if (authorizedBSSIDs.includes(bssid)) {
-            return res.status(400).json({
-                success: false,
-                message: 'BSSID already authorized'
-            });
+        // Add socket ID to user data and persist
+        const user = {
+            id: socket.id,
+            username: userData.username,
+            gender: userData.gender,
+            age: userData.age,
+            about: userData.about,
+            interests: userData.interests,
+            status: userData.status
+        };
+        socketIdToUser.set(socket.id, user);
+
+        // If user was in any prior state, clear it
+        activePartners.delete(socket.id);
+        for (const [key, p] of pendingProposals) {
+            if (p.a === socket.id || p.b === socket.id) {
+                pendingProposals.delete(key);
+            }
         }
 
-        // Add new BSSID
-        const oldBSSIDs = [...authorizedBSSIDs];
-        authorizedBSSIDs.push(bssid);
+        // Try to find a partner
+        const partner = findMatch(user);
 
-        // Add to history
-        const historyEntry = {
-            oldBSSIDs: oldBSSIDs,
-            newBSSIDs: [...authorizedBSSIDs],
-            action: 'add',
-            addedBSSID: bssid,
-            description: description || 'New BSSID added via API',
-            updatedBy: updatedBy || 'API',
-            timestamp: new Date().toISOString()
+        if (partner) {
+            // Create a pending proposal requiring both users to accept
+            const key = [socket.id, partner.id].sort().join('|');
+            pendingProposals.set(key, {
+                a: socket.id,
+                b: partner.id,
+                aAccepted: false,
+                bAccepted: false
+            });
+
+            // Send proposal to both with the other's public profile
+            socket.emit('match-found', {
+                id: partner.id,
+                username: partner.username,
+                gender: partner.gender,
+                age: partner.age,
+                about: partner.about,
+                interests: partner.interests
+            });
+            io.to(partner.id).emit('match-found', {
+                id: user.id,
+                username: user.username,
+                gender: user.gender,
+                age: user.age,
+                about: user.about,
+                interests: user.interests
+            });
+
+            console.log(`Proposed match between ${user.username} and ${partner.username}`);
+        } else {
+            socket.emit('waiting');
+            console.log(`${user.username} (${user.gender}) added to waiting list`);
+        }
+    });
+    
+    socket.on('message', async (data) => {
+        // Only allow messages to confirmed partners
+        const partnerId = activePartners.get(socket.id);
+        if (!partnerId || partnerId !== data.to) return;
+        const payload = {
+            message: data.message,
+            from: socket.id
+        };
+        socket.to(partnerId).emit('message', payload);
+        // Persist message if supabase configured
+        if (supabase) {
+            const me = socketIdToUser.get(socket.id);
+            const partner = socketIdToUser.get(partnerId);
+            try {
+                await supabase.from('messages').insert({
+                    from_socket_id: socket.id,
+                    to_socket_id: partnerId,
+                    from_username: me?.username,
+                    to_username: partner?.username,
+                    body: data.message
+                });
+            } catch (e) {}
+        }
+    });
+    
+    socket.on('match-accept', ({ partnerId }) => {
+        const key = [socket.id, partnerId].sort().join('|');
+        const pending = pendingProposals.get(key);
+        if (!pending) return;
+
+        if (pending.a === socket.id) pending.aAccepted = true;
+        if (pending.b === socket.id) pending.bAccepted = true;
+
+        if (pending.aAccepted && pending.bAccepted) {
+            // Confirm match
+            pendingProposals.delete(key);
+            activePartners.set(pending.a, pending.b);
+            activePartners.set(pending.b, pending.a);
+
+            const userA = socketIdToUser.get(pending.a);
+            const userB = socketIdToUser.get(pending.b);
+
+            io.to(pending.a).emit('match-confirmed', {
+                id: userB.id, username: userB.username, gender: userB.gender, age: userB.age, about: userB.about, interests: userB.interests
+            });
+            io.to(pending.b).emit('match-confirmed', {
+                id: userA.id, username: userA.username, gender: userA.gender, age: userA.age, about: userA.about, interests: userA.interests
+            });
+
+            console.log(`Match confirmed: ${userA?.username} <> ${userB?.username}`);
+        }
+    });
+
+    socket.on('match-reject', ({ partnerId }) => {
+        const key = [socket.id, partnerId].sort().join('|');
+        const pending = pendingProposals.get(key);
+        if (!pending) return;
+
+        pendingProposals.delete(key);
+        // Notify counterpart and re-queue them if still connected
+        io.to(partnerId).emit('match-cancelled');
+
+        // Try to requeue both parties for a new match
+        const rejector = socketIdToUser.get(socket.id);
+        const counterpart = socketIdToUser.get(partnerId);
+
+        const tryRematch = (user) => {
+            if (!user) return;
+            const resolved = findMatch(user);
+            if (resolved) {
+                const newKey = [user.id, resolved.id].sort().join('|');
+                pendingProposals.set(newKey, { a: user.id, b: resolved.id, aAccepted: false, bAccepted: false });
+                io.to(user.id).emit('match-found', {
+                    id: resolved.id, username: resolved.username, gender: resolved.gender, age: resolved.age, about: resolved.about, interests: resolved.interests
+                });
+                io.to(resolved.id).emit('match-found', {
+                    id: user.id, username: user.username, gender: user.gender, age: user.age, about: user.about, interests: user.interests
+                });
+            }
         };
 
-        bssidHistory.push(historyEntry);
+        tryRematch(rejector);
+        tryRematch(counterpart);
+    });
 
-        // Keep only last 100 history entries
-        if (bssidHistory.length > 100) {
-            bssidHistory = bssidHistory.slice(-100);
+    socket.on('typing', ({ to, isTyping }) => {
+        const partnerId = activePartners.get(socket.id);
+        if (!partnerId || partnerId !== to) return;
+        socket.to(partnerId).emit('typing', { from: socket.id, isTyping: Boolean(isTyping) });
+    });
+
+    socket.on('disconnect-me', () => {
+        // Remove user from waiting list if they're there
+        waitingUsers = waitingUsers.filter(user => user.id !== socket.id);
+
+        // If in a pending proposal, cancel it and notify counterpart
+        for (const [key, p] of pendingProposals) {
+            if (p.a === socket.id || p.b === socket.id) {
+                const otherId = p.a === socket.id ? p.b : p.a;
+                pendingProposals.delete(key);
+                io.to(otherId).emit('match-cancelled');
+            }
         }
 
-        console.log(`✅ BSSID added: ${bssid} (Total: ${authorizedBSSIDs.length})`);
-
-        res.json({
-            success: true,
-            message: 'BSSID added successfully',
-            addedBSSID: bssid,
-            authorizedBSSIDs: [...authorizedBSSIDs],
-            totalCount: authorizedBSSIDs.length,
-            timestamp: new Date().toISOString()
-        });
-
-    } catch (error) {
-        console.error('Add BSSID error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Internal server error'
-        });
-    }
-});
-
-// Remove authorized BSSID
-app.post('/api/bssid/remove', (req, res) => {
-    try {
-        const { bssid, description, updatedBy } = req.body;
-
-        console.log(`➖ BSSID REMOVE request: ${bssid} by ${updatedBy || 'Unknown'}`);
-
-        if (!bssid) {
-            return res.status(400).json({
-                success: false,
-                message: 'BSSID is required'
-            });
+        // If in an active conversation, notify partner
+        const partnerId = activePartners.get(socket.id);
+        if (partnerId) {
+            activePartners.delete(socket.id);
+            activePartners.delete(partnerId);
+            io.to(partnerId).emit('partner-disconnected');
         }
 
-        // Check if BSSID exists
-        if (!authorizedBSSIDs.includes(bssid)) {
-            return res.status(400).json({
-                success: false,
-                message: 'BSSID not found in authorized list'
-            });
+        console.log('User requested disconnect:', socket.id);
+    });
+    
+    socket.on('disconnect', () => {
+        // Remove user from waiting list if they're there
+        waitingUsers = waitingUsers.filter(user => user.id !== socket.id);
+
+        // If in a pending proposal, cancel it and notify counterpart
+        for (const [key, p] of pendingProposals) {
+            if (p.a === socket.id || p.b === socket.id) {
+                const otherId = p.a === socket.id ? p.b : p.a;
+                pendingProposals.delete(key);
+                io.to(otherId).emit('match-cancelled');
+            }
         }
 
-        // Prevent removing the last BSSID
-        if (authorizedBSSIDs.length === 1) {
-            return res.status(400).json({
-                success: false,
-                message: 'Cannot remove the last authorized BSSID'
-            });
+        // If in an active conversation, notify partner
+        const partnerId = activePartners.get(socket.id);
+        if (partnerId) {
+            activePartners.delete(socket.id);
+            activePartners.delete(partnerId);
+            io.to(partnerId).emit('partner-disconnected');
         }
 
-        // Remove BSSID
-        const oldBSSIDs = [...authorizedBSSIDs];
-        authorizedBSSIDs = authorizedBSSIDs.filter(b => b !== bssid);
+        socketIdToUser.delete(socket.id);
+        console.log('User disconnected:', socket.id);
+    });
 
-        // Add to history
-        const historyEntry = {
-            oldBSSIDs: oldBSSIDs,
-            newBSSIDs: [...authorizedBSSIDs],
-            action: 'remove',
-            removedBSSID: bssid,
-            description: description || 'BSSID removed via API',
-            updatedBy: updatedBy || 'API',
-            timestamp: new Date().toISOString()
-        };
+    // Follow system (simple relay, no persistence)
+    socket.on('follow', ({ userId }) => {
+        const follower = socketIdToUser.get(socket.id);
+        if (!follower || !userId) return;
+        io.to(userId).emit('followed', { by: socket.id, byName: follower.username });
+    });
 
-        bssidHistory.push(historyEntry);
+    socket.on('unfollow', ({ userId }) => {
+        const follower = socketIdToUser.get(socket.id);
+        if (!follower || !userId) return;
+        io.to(userId).emit('unfollowed', { by: socket.id, byName: follower.username });
+    });
 
-        // Keep only last 100 history entries
-        if (bssidHistory.length > 100) {
-            bssidHistory = bssidHistory.slice(-100);
-        }
+    // Chess ephemeral game relay
+    socket.on('chess-invite', ({ to }) => {
+        const user = socketIdToUser.get(socket.id);
+        if (!user || !to) return;
+        // Only allow inviting confirmed partner
+        const partnerId = activePartners.get(socket.id);
+        if (!partnerId || partnerId !== to) return;
+        io.to(to).emit('chess-invite', { by: socket.id, byName: user.username });
+    });
 
-        console.log(`✅ BSSID removed: ${bssid} (Remaining: ${authorizedBSSIDs.length})`);
+    socket.on('chess-accept', ({ to }) => {
+        const partnerId = activePartners.get(socket.id);
+        if (!partnerId || partnerId !== to) return;
+        // Start the game, inviter (to) is white, acceptor is black
+        io.to(to).emit('chess-start', { color: 'white' });
+        io.to(socket.id).emit('chess-start', { color: 'black' });
+    });
 
-        res.json({
-            success: true,
-            message: 'BSSID removed successfully',
-            removedBSSID: bssid,
-            authorizedBSSIDs: [...authorizedBSSIDs],
-            totalCount: authorizedBSSIDs.length,
-            timestamp: new Date().toISOString()
-        });
+    socket.on('chess-move', ({ to, move }) => {
+        const partnerId = activePartners.get(socket.id);
+        if (!partnerId || partnerId !== to) return;
+        io.to(to).emit('chess-move', { move });
+    });
 
-    } catch (error) {
-        console.error('Remove BSSID error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Internal server error'
-        });
-    }
-});
-
-// Get all authorized BSSIDs
-app.get('/api/bssid/all', (req, res) => {
-    try {
-        console.log(`📡 All BSSIDs request - ${authorizedBSSIDs.length} authorized BSSIDs`);
-
-        res.json({
-            success: true,
-            bssids: authorizedBSSIDs,
-            primaryBSSID: authorizedBSSIDs[0],
-            count: authorizedBSSIDs.length,
-            timestamp: new Date().toISOString(),
-            message: 'All authorized BSSIDs retrieved successfully'
-        });
-
-    } catch (error) {
-        console.error('Get all BSSIDs error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Internal server error'
-        });
-    }
-});
-
-// Error handling middleware
-app.use((err, req, res, next) => {
-    console.error('Unhandled error:', err);
-    res.status(500).json({
-        success: false,
-        message: 'Internal server error'
+    socket.on('chess-resign', ({ to }) => {
+        const partnerId = activePartners.get(socket.id);
+        if (!partnerId || partnerId !== to) return;
+        io.to(to).emit('chess-resign');
     });
 });
 
-// 404 handler
-app.use((req, res) => {
-    res.status(404).json({
-        success: false,
-        message: 'Endpoint not found'
-    });
+// Recent chats API (simple, by username)
+app.get('/api/recent-chats/:username', async (req, res) => {
+    if (!supabase) return res.json([]);
+    const { username } = req.params;
+    const { data, error } = await supabase
+        .from('messages')
+        .select('id, from_username, to_username, body, created_at')
+        .or(`from_username.eq.${username},to_username.eq.${username}`)
+        .order('created_at', { ascending: false })
+        .limit(50);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
 });
 
-// Auto-cleanup every hour
-setInterval(() => {
-    const cutoffTime = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    let cleanedCount = 0;
-
-    for (const [deviceId, timer] of deviceTimers.entries()) {
-        if (timer.state === TIMER_STATES.COMPLETED &&
-            new Date(timer.lastUpdate) < cutoffTime) {
-            deviceTimers.delete(deviceId);
-            cleanedCount++;
-        }
-    }
-
-    if (cleanedCount > 0) {
-        console.log(`🧹 Auto-cleanup: Removed ${cleanedCount} old timers`);
-    }
-}, 60 * 60 * 1000); // Every hour
-
-app.listen(PORT, () => {
-    console.log(`� LettsBunk Royal Server running on port ${PORT}`);
-    console.log(`📊 Timer tracking system with student names ready`);
-    console.log(`🌐 Authorized BSSIDs (${authorizedBSSIDs.length}): ${authorizedBSSIDs.join(', ')}`);
-    console.log(`🎨 Royal Olive & Sand Brown Theme Support`);
-    console.log(`📱 API Endpoints available:`);
-    console.log(`   POST /api/timer/start - Start timer (with student name)`);
-    console.log(`   POST /api/timer/pause - Pause timer`);
-    console.log(`   POST /api/timer/resume - Resume timer`);
-    console.log(`   POST /api/timer/stop - Stop timer`);
-    console.log(`   POST /api/timer/update - Update timer (heartbeat)`);
-    console.log(`   GET /api/timers/all - Get all timers (for teacher dashboard)`);
-    console.log(`   GET /api/timer/:deviceId - Get specific timer`);
-    console.log(`   POST /api/timers/clear-completed - Clear completed timers`);
-    console.log(`   DELETE /api/timers/cleanup - Auto cleanup old timers`);
-    console.log(`   GET /api/bssid/current - Get current authorized BSSIDs`);
-    console.log(`   GET /api/bssid/all - Get all authorized BSSIDs`);
-    console.log(`   POST /api/bssid/update - Update primary BSSID`);
-    console.log(`   POST /api/bssid/add - Add new authorized BSSID`);
-    console.log(`   POST /api/bssid/remove - Remove authorized BSSID`);
-    console.log(`   GET /api/bssid/history - Get BSSID change history`);
-    console.log(`   GET /health - Health check`);
-    console.log(`👥 Student name tracking enabled`);
-    console.log(`🔄 Auto-cleanup every hour for old completed timers`);
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
 });
