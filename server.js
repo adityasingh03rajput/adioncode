@@ -20,6 +20,11 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
 });
 
+// New route to serve the admin dashboard
+app.get('/admin', (req, res) => {
+    res.sendFile(path.join(__dirname, 'admin.html'));
+});
+
 // Store users waiting for a match
 let waitingUsers = [];
 // Track basic user profiles by socket id
@@ -1014,31 +1019,47 @@ const adminNs = io.of('/admin');
 adminNs.on('connection', (adminSocket) => {
     console.log(`[Admin] Admin connected: ${adminSocket.id}`);
 
-    const listPairs = () => {
-        const result = [];
-        const seenPairs = new Set();
-        for (const [id1, id2] of activePartners.entries()) {
-            const sortedIds = [id1, id2].sort().join('|');
-            if (!seenPairs.has(sortedIds)) {
-                const user1 = socketIdToUser.get(id1) || { username: `Unknown (${id1})` };
-                const user2 = socketIdToUser.get(id2) || { username: `Unknown (${id2})` };
-                result.push({ id1, id2, name1: user1.username, name2: user2.username });
-                seenPairs.add(sortedIds);
-            }
+    // Function to get current user status
+    const getUserStatus = (id) => {
+        if (bannedIds.has(id)) return 'banned';
+        if (activePartners.has(id)) return 'matched';
+        if (waitingUsers.some(u => u.id === id)) return 'waiting';
+        for (const [key, p] of pendingProposals) {
+            if (p.a === id || p.b === id) return 'pending_match';
         }
-        adminSocket.emit('admin:pairs', result);
+        if (activeGames.has(id)) return 'in_game';
+        return 'online'; // Default for connected but not in specific state
+    };
+
+    const listUsers = () => {
+        const users = [];
+        for (const [id, userProfile] of socketIdToUser.entries()) {
+            users.push({
+                id: userProfile.id,
+                username: userProfile.username,
+                age: userProfile.age,
+                gender: userProfile.gender,
+                status: getUserStatus(userProfile.id),
+                partnerId: activePartners.get(userProfile.id) || null
+            });
+        }
+        adminSocket.emit('admin:users', users);
     };
 
     const listBanned = () => {
-        const bannedUsers = Array.from(bannedIds).map(id => {
-            const user = socketIdToUser.get(id);
-            return user ? { id, username: user.username } : { id, username: 'Unknown (disconnected)' };
-        });
-        adminSocket.emit('admin:banned', bannedUsers);
+        const bannedUsersData = [];
+        for (const id of bannedIds) {
+            const user = socketIdToUser.get(id); // Check if still connected
+            bannedUsersData.push({
+                id: id,
+                username: user ? user.username : 'Unknown (disconnected)'
+            });
+        }
+        adminSocket.emit('admin:banned', bannedUsersData);
     };
 
     adminSocket.on('admin:list', () => {
-        listPairs();
+        listUsers();
         listBanned();
         console.log(`[Admin] Admin ${adminSocket.id} requested lists.`);
     });
@@ -1058,7 +1079,9 @@ adminNs.on('connection', (adminSocket) => {
         } else {
             console.warn(`[Admin] Terminate failed: ${id1} and ${id2} are not active partners.`);
         }
-        listPairs();
+        listUsers(); // Refresh lists for all admins
+        listBanned();
+        adminNs.emit('admin:stats', getStats()); // Update stats
     });
 
     adminSocket.on('admin:ban', ({ id }) => {
@@ -1069,10 +1092,12 @@ adminNs.on('connection', (adminSocket) => {
         if (!bannedIds.has(id)) {
             bannedIds.add(id);
             console.log(`[Admin] Admin ${adminSocket.id} banned user: ${id}.`);
-            io.to(id).disconnectSockets(true); // Force disconnect the banned user
+            io.sockets.sockets.get(id)?.disconnect(true); // Force disconnect the banned user if connected
             cleanupUser(id); // Immediately clean up their state
         }
+        listUsers(); // Refresh lists for all admins
         listBanned();
+        adminNs.emit('admin:stats', getStats()); // Update stats
     });
     
     adminSocket.on('admin:unban', ({ id }) => {
@@ -1083,33 +1108,31 @@ adminNs.on('connection', (adminSocket) => {
         if (bannedIds.delete(id)) {
             console.log(`[Admin] Admin ${adminSocket.id} unbanned user: ${id}.`);
         }
+        listUsers(); // Refresh lists for all admins
         listBanned();
+        adminNs.emit('admin:stats', getStats()); // Update stats
     });
-    
-    adminSocket.on('admin:stats', () => {
-        const stats = {
+
+    const getStats = () => {
+        return {
+            connectedSockets: io.of('/').sockets.size,
             waitingUsers: waitingUsers.length,
             activePairs: new Set(Array.from(activePartners.values())).size, 
             pendingProposals: pendingProposals.size,
-            activeGames: new Set(Array.from(activeGames.values()).map(game => game.game || game.board || game.partnerId)).size, // Counting unique game instances
-            bannedUsers: bannedIds.size,
-            connectedSockets: io.of('/').sockets.size // Total sockets connected to the default namespace
+            activeGames: new Set(Array.from(activeGames.values()).map(game => game.game || game.board || game.partnerId)).size,
+            bannedUsers: bannedIds.size
         };
-        adminSocket.emit('admin:stats', stats);
+    };
+
+    adminSocket.on('admin:stats', () => {
+        adminSocket.emit('admin:stats', getStats());
     });
 
     const adminInterval = setInterval(() => {
-        listPairs();
+        listUsers();
         listBanned();
-        adminSocket.emit('admin:stats', {
-            waitingUsers: waitingUsers.length,
-            activePairs: new Set(Array.from(activePartners.values())).size,
-            pendingProposals: pendingProposals.size,
-            activeGames: new Set(Array.from(activeGames.values()).map(game => game.game || game.board || game.partnerId)).size,
-            bannedUsers: bannedIds.size,
-            connectedSockets: io.of('/').sockets.size
-        });
-    }, 5000);
+        adminNs.emit('admin:stats', getStats()); // Emit to all connected admins
+    }, 3000); // Update every 3 seconds
 
     adminSocket.on('disconnect', () => {
         console.log(`[Admin] Admin disconnected: ${adminSocket.id}.`);
