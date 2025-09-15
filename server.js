@@ -441,7 +441,7 @@ io.on('connection', (socket) => {
 
     socket.on('unfollow', ({ userId, username }) => {
         const follower = socketIdToUser.get(socket.id);
-        const partnerId = activePartners.get(socket.id); // unfollow can happen even if not active partner if implemented in UI for followed friends
+        // unfollow can happen even if not active partner if implemented in UI for followed friends
         
         // Allow unfollow if the user is in the followed list, regardless of current chat
         if (!follower || !userId || !userFollows.has(socket.id) || !userFollows.get(socket.id).has(userId)) {
@@ -457,7 +457,7 @@ io.on('connection', (socket) => {
     socket.on('request-followed-status', ({ friendIds }) => {
         const onlineFriends = friendIds.filter(id => socketIdToUser.has(id));
         socket.emit('followed-status-update', { onlineFriends });
-        console.log(`[Status Request] ${socket.id} requested status for followed friends. Online: ${onlineFriends.join(', ')}`);
+        // console.log(`[Status Request] ${socket.id} requested status for followed friends. Online: ${onlineFriends.join(', ')}`); // Removed this log
     });
 
     socket.on('rechat-request', ({ friendId }) => {
@@ -528,7 +528,7 @@ io.on('connection', (socket) => {
         // Clean up the pending game state initiated by the inviter
         if (activeGames.has(inviterSocket)) {
             const gameData = activeGames.get(inviterSocket);
-            if (gameData.partnerId === socket.id && gameData.type === type) {
+            if (gameData.partnerId && activeGames.has(gameData.partnerId)) {
                 activeGames.delete(inviterSocket);
                 activeGames.delete(socket.id); // Also remove acceptor's temporary entry if it exists
                 console.log(`[Game Cleanup] Cleaned up ${type} game state after rejection.`);
