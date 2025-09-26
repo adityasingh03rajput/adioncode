@@ -2,10 +2,12 @@ const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const path = require('path');
-const { Chess } = require('chess.js'); // Import Chess.js for server-side game logic
 
 const app = express();
 const server = http.createServer(app);
+
+// Middleware to parse JSON
+app.use(express.json({ limit: '10mb' })); // For large base64 images
 
 // Initialize Socket.io with CORS settings
 const io = socketIo(server, {
@@ -35,11 +37,11 @@ const pendingProposals = new Map();
 const activePartners = new Map();
 // Banned ids to prevent them from rejoining
 const bannedIds = new Set();
-// Track active games: socket id -> game data (e.g., Chess instance, TTT board, RPS moves)
-// Each active game actually has two entries (one for each player) pointing to the same game instance.
-const activeGames = new Map();
 // Track followed relationships: followerId -> Set of followedUserIds
 const userFollows = new Map(); // Stores Set<string> of user IDs that socket.id follows.
+
+// Map for face search: anonymousId -> realSocketId
+const faceSearchMap = new Map();
 
 // Store messages temporarily for unsend/edit functionality within an active chat session
 // messageId -> { senderId, receiverId, text, timestamp, edited }
@@ -91,41 +93,6 @@ function findMatch(user) {
     return null;
 }
 
-// --- Game Logic Helper Functions ---
-
-// Checks for a winner in a Tic Tac Toe board
-function checkTicTacToeWinner(board) {
-    const winPatterns = [
-        [0, 1, 2], [3, 4, 5], [6, 7, 8], // rows
-        [0, 3, 6], [1, 4, 7], [2, 5, 8], // columns
-        [0, 4, 8], [2, 4, 6]             // diagonals
-    ];
-
-    for (const pattern of winPatterns) {
-        const [a, b, c] = pattern;
-        if (board[a] && board[a] === board[b] && board[a] === board[c]) {
-            return board[a]; // Returns 'X' or 'O' for the winner
-        }
-    }
-
-    if (board.every(cell => cell !== '')) return 'draw'; // All cells filled, no winner
-    return null; // No winner yet
-}
-
-// Determines the winner of a Rock Paper Scissors round
-function determineRPSWinner(player1Move, player2Move) {
-    if (player1Move === player2Move) return 'draw';
-    
-    const winConditions = {
-        'rock': 'scissors',
-        'paper': 'rock',
-        'scissors': 'paper'
-    };
-    
-    // Player 1 wins if their move beats player 2's move
-    return winConditions[player1Move] === player2Move ? 'player1' : 'player2';
-}
-
 // --- Socket.io Connection Handling ---
 io.on('connection', (socket) => {
     console.log(`[Connect] User connected: ${socket.id}`);
@@ -154,7 +121,8 @@ io.on('connection', (socket) => {
             gender: userData.gender,
             age: userData.age,
             about: userData.about,
-            interests: userData.interests
+            interests: userData.interests,
+            profilePic: userData.profilePic || null
         };
         socketIdToUser.set(socket.id, user);
 
@@ -166,16 +134,6 @@ io.on('connection', (socket) => {
             if (p.a === socket.id || p.b === socket.id) {
                 pendingProposals.delete(key);
             }
-        }
-        // Also clear any active game states for this socket
-        if (activeGames.has(socket.id)) {
-            const gameData = activeGames.get(socket.id);
-            if (gameData.partnerId && activeGames.has(gameData.partnerId)) {
-                activeGames.delete(gameData.partnerId);
-                io.to(gameData.partnerId).emit('game-ended', { reason: 'Partner started new session' });
-                console.log(`[Join] Notified partner ${gameData.partnerId} that ${socket.id} started a new session.`);
-            }
-            activeGames.delete(socket.id);
         }
 
         // Try to find a partner
@@ -394,17 +352,6 @@ io.on('connection', (socket) => {
             }
         }
 
-        // Clean up any active games involving this user
-        if (activeGames.has(disconnectedSocketId)) {
-            const game = activeGames.get(disconnectedSocketId);
-            activeGames.delete(disconnectedSocketId);
-            if (game.partnerId && activeGames.has(game.partnerId)) {
-                activeGames.delete(game.partnerId); // Remove partner's game entry
-                io.to(game.partnerId).emit('game-ended', { reason: 'Partner disconnected' }); // Notify partner
-                console.log(`[Cleanup] Active game with ${game.partnerId} ended due to ${disconnectedSocketId} disconnect.`);
-            }
-        }
-
         // Clear temporary messages for this user
         activeMessages.forEach((msg, msgId) => {
             if (msg.senderId === disconnectedSocketId || msg.receiverId === disconnectedSocketId) {
@@ -492,525 +439,11 @@ io.on('connection', (socket) => {
                 pendingProposals.delete(key);
             }
         }
-        // Also clear any active games involving these users
-        if (activeGames.has(socket.id)) {
-            const gameData = activeGames.get(socket.id);
-            if (gameData.partnerId && activeGames.has(gameData.partnerId)) {
-                activeGames.delete(gameData.partnerId);
-            }
-            activeGames.delete(socket.id);
-        }
-        if (activeGames.has(friendId)) {
-            const gameData = activeGames.get(friendId);
-            if (gameData.partnerId && activeGames.has(gameData.partnerId)) {
-                activeGames.delete(gameData.partnerId);
-            }
-            activeGames.delete(friendId);
-        }
 
         // Establish direct chat
         activePartners.set(socket.id, friendId);
         activePartners.set(friendId, socket.id);
-
-        io.to(socket.id).emit('rechat-confirmed', { partnerProfile: targetFriend });
-        io.to(friendId).emit('rechat-confirmed', { partnerProfile: requestingUser });
         console.log(`[Rechat] ${requestingUser.username} (${socket.id}) rechatting with ${targetFriend.username} (${friendId}).`);
-    });
-
-
-    // Handles when an invitee rejects a game invitation (notifies the inviter)
-    socket.on('game-invite-rejected', ({ to, type }) => {
-        const inviterSocket = to;
-        const inviteeUser = socketIdToUser.get(socket.id);
-        if (inviteeUser) {
-            io.to(inviterSocket).emit('game-invite-rejected', {
-                by: socket.id,
-                byName: inviteeUser.username,
-                type: type
-            });
-            console.log(`[Game Invite] ${inviteeUser.username} (${socket.id}) rejected ${type} invite from ${inviterSocket}.`);
-        }
-        // Clean up the pending game state initiated by the inviter
-        if (activeGames.has(inviterSocket)) {
-            const gameData = activeGames.get(inviterSocket);
-            if (gameData.partnerId && activeGames.has(gameData.partnerId)) {
-                activeGames.delete(inviterSocket);
-                activeGames.delete(socket.id); // Also remove acceptor's temporary entry if it exists
-                console.log(`[Game Cleanup] Cleaned up ${type} game state after rejection.`);
-            }
-        }
-    });
-
-
-    // --- Chess Game Handlers ---
-    socket.on('chess-invite', ({ to }) => {
-        const user = socketIdToUser.get(socket.id);
-        const partnerId = activePartners.get(socket.id);
-        if (!user || !to || partnerId !== to) {
-            console.warn(`[Chess Invite] Failed: ${socket.id} not partnered with ${to}.`);
-            return;
-        }
-        
-        if (activeGames.has(socket.id) || activeGames.has(to)) {
-             socket.emit('game-invite-failed', { message: "You or your partner are already in a game or have a pending invite." });
-             console.warn(`[Chess Invite] Failed: ${socket.id} or ${to} already in a game/pending.`);
-             return;
-        }
-
-        const gameInstance = new Chess();
-        
-        activeGames.set(socket.id, {
-            type: 'chess',
-            game: gameInstance,
-            partnerId: to,
-            color: 'white',
-            drawOfferBy: null
-        });
-        
-        activeGames.set(to, {
-            type: 'chess',
-            game: gameInstance,
-            partnerId: socket.id,
-            color: 'black',
-            drawOfferBy: null
-        });
-        
-        io.to(to).emit('chess-invite', { 
-            by: socket.id, 
-            byName: user.username 
-        });
-        console.log(`[Chess Invite] ${user.username} (${socket.id}) invited ${to} to chess.`);
-    });
-
-    socket.on('chess-accept', ({ to }) => {
-        const partnerId = activePartners.get(socket.id);
-        if (!partnerId || partnerId !== to) {
-            console.warn(`[Chess Accept] Failed: ${socket.id} not partnered with ${to}.`);
-            return;
-        }
-        
-        const gameDataInviter = activeGames.get(to);
-        const gameDataAcceptor = activeGames.get(socket.id);
-        
-        if (!gameDataInviter || gameDataInviter.type !== 'chess' || !gameDataAcceptor || gameDataAcceptor.type !== 'chess' || gameDataInviter.game !== gameDataAcceptor.game) {
-            console.warn(`[Chess Accept] Failed: Invalid game data for ${socket.id} and ${to}.`);
-            return;
-        }
-        
-        io.to(to).emit('chess-start', { color: gameDataInviter.color, fen: gameDataInviter.game.fen() });
-        io.to(socket.id).emit('chess-start', { color: gameDataAcceptor.color, fen: gameDataAcceptor.game.fen() });
-        console.log(`[Chess Start] Game started between ${to} (white) and ${socket.id} (black).`);
-    });
-
-    socket.on('chess-move', ({ to, move }) => {
-        const partnerId = activePartners.get(socket.id);
-        if (!partnerId || partnerId !== to) {
-            console.warn(`[Chess Move] Failed: ${socket.id} not partnered with ${to}.`);
-            return;
-        }
-        
-        const gameData = activeGames.get(socket.id);
-        const partnerGameData = activeGames.get(to);
-
-        if (!gameData || gameData.type !== 'chess' || !partnerGameData) {
-            console.warn(`[Chess Move] Failed: No valid game data for ${socket.id}.`);
-            return;
-        }
-        
-        try {
-            const currentTurnColor = gameData.game.turn() === 'w' ? 'white' : 'black';
-            if (currentTurnColor !== gameData.color) {
-                console.warn(`[Chess Move] Not ${socket.id}'s turn. Current turn: ${currentTurnColor}.`);
-                return;
-            }
-
-            const result = gameData.game.move(move);
-            if (result) {
-                gameData.drawOfferBy = null; // Clear any pending draw offer after a move
-                partnerGameData.drawOfferBy = null;
-
-                io.to(to).emit('chess-move', { move: result });
-                console.log(`[Chess Move] ${socket.id} to ${to}: ${result.san}`);
-                
-                if (gameData.game.game_over()) {
-                    let outcome = 'draw';
-                    if (gameData.game.in_checkmate()) {
-                        outcome = gameData.game.turn() === 'w' ? 'black' : 'white'; 
-                        console.log(`[Chess End] Checkmate! ${outcome} wins.`);
-                    } else if (gameData.game.in_stalemate() || gameData.game.in_threefold_repetition() || gameData.game.insufficient_material() || gameData.game.in_draw()) {
-                        outcome = 'draw';
-                        console.log(`[Chess End] Draw.`);
-                    }
-                    
-                    io.to(socket.id).emit('chess-game-over', { outcome: outcome === gameData.color ? 'win' : (outcome === 'draw' ? 'draw' : 'lose') });
-                    io.to(to).emit('chess-game-over', { outcome: activeGames.get(to).color === outcome ? 'win' : (outcome === 'draw' ? 'draw' : 'lose') });
-                    
-                    activeGames.delete(socket.id);
-                    activeGames.delete(to);
-                }
-            } else {
-                console.warn(`[Chess Move] Invalid move attempted by ${socket.id}:`, move);
-            }
-        } catch (e) {
-            console.error(`[Chess Move] Error processing move from ${socket.id}:`, e);
-        }
-    });
-
-    socket.on('chess-resign', ({ to }) => {
-        const partnerId = activePartners.get(socket.id);
-        if (!partnerId || partnerId !== to) {
-            console.warn(`[Chess Resign] Failed: ${socket.id} not partnered with ${to}.`);
-            return;
-        }
-        
-        io.to(to).emit('chess-resigned');
-        io.to(socket.id).emit('chess-resigned'); // Confirm resignation to self
-        console.log(`[Chess Resign] ${socket.id} resigned from game against ${to}.`);
-        
-        activeGames.delete(socket.id);
-        activeGames.delete(to);
-    });
-
-    // --- Chess Draw Offer Handlers ---
-    socket.on('chess-offer-draw', ({ to }) => {
-        const user = socketIdToUser.get(socket.id);
-        const partnerId = activePartners.get(socket.id);
-        if (!user || !to || partnerId !== to) {
-            console.warn(`[Chess Draw Offer] Failed: ${socket.id} not partnered with ${to}.`);
-            return;
-        }
-
-        const gameData = activeGames.get(socket.id);
-        const partnerGameData = activeGames.get(to);
-        if (!gameData || gameData.type !== 'chess' || gameData.game.game_over() || !partnerGameData) {
-            console.warn(`[Chess Draw Offer] Failed: No valid chess game or game over for ${socket.id}.`);
-            return;
-        }
-
-        if (gameData.drawOfferBy) { // Already offered a draw
-            console.log(`[Chess Draw Offer] ${socket.id} already has a pending draw offer.`);
-            return;
-        }
-        if (partnerGameData.drawOfferBy === socket.id) { // Opponent already offered to you
-            console.log(`[Chess Draw Offer] ${to} already offered draw to ${socket.id}.`);
-            return;
-        }
-
-        gameData.drawOfferBy = socket.id; // Mark that this player offered a draw
-        partnerGameData.drawOfferBy = socket.id; // Mark for partner's game data as well
-
-        io.to(to).emit('chess-draw-offer', { from: socket.id, byName: user.username });
-        console.log(`[Chess Draw Offer] ${user.username} (${socket.id}) offered a draw to ${to}.`);
-    });
-
-    socket.on('chess-accept-draw', ({ to }) => {
-        const partnerId = activePartners.get(socket.id);
-        if (!partnerId || partnerId !== to) {
-            console.warn(`[Chess Draw Accept] Failed: ${socket.id} not partnered with ${to}.`);
-            return;
-        }
-
-        const gameData = activeGames.get(socket.id); // Acceptor's game data
-        const inviterGameData = activeGames.get(to); // Inviter's game data
-
-        if (!gameData || gameData.type !== 'chess' || !inviterGameData || inviterGameData.type !== 'chess') {
-            console.warn(`[Chess Draw Accept] Failed: No valid chess game for ${socket.id} and ${to}.`);
-            return;
-        }
-        
-        // Ensure the draw was offered by the partner (the 'to' player)
-        if (gameData.drawOfferBy === to) {
-            io.to(socket.id).emit('chess-game-over', { outcome: 'draw' });
-            io.to(to).emit('chess-game-over', { outcome: 'draw' });
-            console.log(`[Chess End] Chess game between ${socket.id} and ${to} ended in a draw by agreement.`);
-            
-            activeGames.delete(socket.id);
-            activeGames.delete(to);
-        } else {
-            console.warn(`[Chess Draw Accept] Failed: No pending offer from ${to} to ${socket.id}.`);
-        }
-    });
-
-    socket.on('chess-reject-draw', ({ to }) => {
-        const partnerId = activePartners.get(socket.id);
-        if (!partnerId || partnerId !== to) {
-            console.warn(`[Chess Draw Reject] Failed: ${socket.id} not partnered with ${to}.`);
-            return;
-        }
-
-        const gameData = activeGames.get(socket.id); // Rejector's game data
-        const inviterGameData = activeGames.get(to); // Inviter's game data
-
-        if (!gameData || gameData.type !== 'chess' || !inviterGameData || inviterGameData.type !== 'chess') {
-            console.warn(`[Chess Draw Reject] Failed: No valid chess game for ${socket.id} and ${to}.`);
-            return;
-        }
-
-        // Ensure the draw was offered by the partner (the 'to' player)
-        if (gameData.drawOfferBy === to) {
-            gameData.drawOfferBy = null; // Clear offer for rejector
-            inviterGameData.drawOfferBy = null; // Clear offer for inviter
-            io.to(to).emit('chess-draw-rejected', { from: socket.id, byName: socketIdToUser.get(socket.id)?.username || 'Opponent' });
-            console.log(`[Chess Draw Reject] ${socket.id} rejected draw offer from ${to}.`);
-        } else {
-            console.warn(`[Chess Draw Reject] Failed: No pending offer from ${to} to ${socket.id}.`);
-        }
-    });
-
-
-    // --- Tic Tac Toe Handlers ---
-    socket.on('ttt-invite', ({ to }) => {
-        const user = socketIdToUser.get(socket.id);
-        const partnerId = activePartners.get(socket.id);
-        if (!user || !to || partnerId !== to) {
-            console.warn(`[TTT Invite] Failed: ${socket.id} not partnered with ${to}.`);
-            return;
-        }
-        
-        if (activeGames.has(socket.id) || activeGames.has(to)) {
-             socket.emit('game-invite-failed', { message: "You or your partner are already in a game or have a pending invite." });
-             console.warn(`[TTT Invite] Failed: ${socket.id} or ${to} already in a game/pending.`);
-             return;
-        }
-
-        const board = ['', '', '', '', '', '', '', '', '']; // Empty TTT board
-        const initialTurn = 'X'; // 'X' always starts
-        
-        activeGames.set(socket.id, {
-            type: 'ttt',
-            board: board, // Shared board reference
-            partnerId: to,
-            mark: 'X',
-            currentTurn: initialTurn
-        });
-        
-        activeGames.set(to, {
-            type: 'ttt',
-            board: board,
-            partnerId: socket.id,
-            mark: 'O',
-            currentTurn: initialTurn
-        });
-        
-        io.to(to).emit('ttt-invite', { 
-            by: socket.id, 
-            byName: user.username 
-        });
-        console.log(`[TTT Invite] ${user.username} (${socket.id}) invited ${to} to Tic Tac Toe.`);
-    });
-
-    socket.on('ttt-accept', ({ to }) => {
-        const partnerId = activePartners.get(socket.id);
-        if (!partnerId || partnerId !== to) {
-            console.warn(`[TTT Accept] Failed: ${socket.id} not partnered with ${to}.`);
-            return;
-        }
-        
-        const gameDataInviter = activeGames.get(to);
-        const gameDataAcceptor = activeGames.get(socket.id);
-        
-        if (!gameDataInviter || gameDataInviter.type !== 'ttt' || !gameDataAcceptor || gameDataAcceptor.type !== 'ttt' || gameDataInviter.board !== gameDataAcceptor.board) {
-            console.warn(`[TTT Accept] Failed: Invalid game data for ${socket.id} and ${to}.`);
-            return;
-        }
-        
-        io.to(to).emit('ttt-start', { 
-            you: gameDataInviter.mark, 
-            board: gameDataInviter.board,
-            currentTurn: gameDataInviter.currentTurn
-        });
-        io.to(socket.id).emit('ttt-start', { 
-            you: gameDataAcceptor.mark, 
-            board: gameDataAcceptor.board,
-            currentTurn: gameDataAcceptor.currentTurn
-        });
-        console.log(`[TTT Start] Game started between ${to} (X) and ${socket.id} (O).`);
-    });
-
-    socket.on('ttt-move', ({ to, idx }) => {
-        const partnerId = activePartners.get(socket.id);
-        if (!partnerId || partnerId !== to) {
-            console.warn(`[TTT Move] Failed: ${socket.id} not partnered with ${to}.`);
-            return;
-        }
-        
-        const gameData = activeGames.get(socket.id);
-        const partnerGameData = activeGames.get(to);
-
-        if (!gameData || gameData.type !== 'ttt' || !partnerGameData) {
-            console.warn(`[TTT Move] Failed: No valid game data for ${socket.id}.`);
-            return;
-        }
-        
-        // Validate move: check if cell is empty, idx is valid, and it's the player's turn
-        if (gameData.board[idx] !== '' || idx < 0 || idx > 8 || gameData.currentTurn !== gameData.mark) {
-            console.warn(`[TTT Move] Invalid move by ${socket.id}: idx=${idx}, currentTurn=${gameData.currentTurn}, playerMark=${gameData.mark}.`);
-            return;
-        }
-        
-        // Make the move on the shared board
-        gameData.board[idx] = gameData.mark;
-        console.log(`[TTT Move] ${socket.id} (mark: ${gameData.mark}) moved to idx ${idx}.`);
-        
-        // Check for winner after the move
-        const winner = checkTicTacToeWinner(gameData.board);
-
-        if (winner) {
-            let outcomeForSender = (winner === 'draw') ? 'draw' : (winner === gameData.mark ? 'win' : 'lose');
-            let outcomeForPartner = (winner === 'draw') ? 'draw' : (winner === partnerGameData.mark ? 'win' : 'lose');
-            
-            io.to(socket.id).emit('ttt-game-over', { outcome: outcomeForSender });
-            io.to(to).emit('ttt-game-over', { outcome: outcomeForPartner });
-            console.log(`[TTT End] Game over. Winner: ${winner}.`);
-            
-            activeGames.delete(socket.id);
-            activeGames.delete(to);
-        } else {
-            // No winner yet, switch turn
-            gameData.currentTurn = (gameData.mark === 'X' ? 'O' : 'X');
-            partnerGameData.currentTurn = gameData.currentTurn;
-
-            // Send move to partner (to update their board)
-            io.to(to).emit('ttt-move', { idx, mark: gameData.mark });
-            
-            // Update turn for both players
-            io.to(socket.id).emit('ttt-update-turn', { currentTurn: gameData.currentTurn, yourMark: gameData.mark });
-            io.to(to).emit('ttt-update-turn', { currentTurn: partnerGameData.currentTurn, yourMark: partnerGameData.mark });
-        }
-    });
-
-    socket.on('ttt-reset', ({ to }) => {
-        const partnerId = activePartners.get(socket.id);
-        if (!partnerId || partnerId !== to) {
-            console.warn(`[TTT Reset] Failed: ${socket.id} not partnered with ${to}.`);
-            return;
-        }
-        
-        const gameData = activeGames.get(socket.id);
-        const partnerGameData = activeGames.get(to);
-
-        if (!gameData || gameData.type !== 'ttt' || !partnerGameData) {
-            console.warn(`[TTT Reset] Failed: No valid game data for ${socket.id}.`);
-            return;
-        }
-        
-        const newBoard = ['', '', '', '', '', '', '', '', ''];
-        gameData.board.splice(0, gameData.board.length, ...newBoard); // Modify in place
-        partnerGameData.board.splice(0, partnerGameData.board.length, ...newBoard);
-
-        gameData.currentTurn = 'X';
-        partnerGameData.currentTurn = 'X';
-        
-        io.to(socket.id).emit('ttt-reset');
-        io.to(to).emit('ttt-reset');
-
-        io.to(socket.id).emit('ttt-update-turn', { currentTurn: gameData.currentTurn, yourMark: gameData.mark });
-        io.to(to).emit('ttt-update-turn', { currentTurn: partnerGameData.currentTurn, yourMark: partnerGameData.mark });
-        console.log(`[TTT Reset] Game between ${socket.id} and ${to} reset.`);
-    });
-
-    // --- Rock Paper Scissors Handlers ---
-    socket.on('rps-invite', ({ to }) => {
-        const user = socketIdToUser.get(socket.id);
-        const partnerId = activePartners.get(socket.id);
-        if (!user || !to || partnerId !== to) {
-            console.warn(`[RPS Invite] Failed: ${socket.id} not partnered with ${to}.`);
-            return;
-        }
-        
-        if (activeGames.has(socket.id) || activeGames.has(to)) {
-             socket.emit('game-invite-failed', { message: "You or your partner are already in a game or have a pending invite." });
-             console.warn(`[RPS Invite] Failed: ${socket.id} or ${to} already in a game/pending.`);
-             return;
-        }
-
-        activeGames.set(socket.id, {
-            type: 'rps',
-            partnerId: to,
-            move: null
-        });
-        
-        activeGames.set(to, {
-            type: 'rps',
-            partnerId: socket.id,
-            move: null
-        });
-        
-        io.to(to).emit('rps-invite', { 
-            by: socket.id, 
-            byName: user.username 
-        });
-        console.log(`[RPS Invite] ${user.username} (${socket.id}) invited ${to} to Rock Paper Scissors.`);
-    });
-
-    socket.on('rps-accept', ({ to }) => {
-        const partnerId = activePartners.get(socket.id);
-        if (!partnerId || partnerId !== to) {
-            console.warn(`[RPS Accept] Failed: ${socket.id} not partnered with ${to}.`);
-            return;
-        }
-        
-        const gameDataInviter = activeGames.get(to);
-        const gameDataAcceptor = activeGames.get(socket.id);
-        
-        if (!gameDataInviter || gameDataInviter.type !== 'rps' || !gameDataAcceptor || gameDataAcceptor.type !== 'rps') {
-            console.warn(`[RPS Accept] Failed: Invalid game data for ${socket.id} and ${to}.`);
-            return;
-        }
-        
-        io.to(to).emit('rps-start');
-        io.to(socket.id).emit('rps-start');
-        console.log(`[RPS Start] Game started between ${to} and ${socket.id}.`);
-    });
-
-    socket.on('rps-move', ({ to, move }) => {
-        const partnerId = activePartners.get(socket.id);
-        if (!partnerId || partnerId !== to) {
-            console.warn(`[RPS Move] Failed: ${socket.id} not partnered with ${to}.`);
-            return;
-        }
-        
-        const gameData = activeGames.get(socket.id);
-        if (!gameData || gameData.type !== 'rps' || gameData.move !== null) {
-            console.warn(`[RPS Move] Failed: ${socket.id} already moved or not in game.`);
-            return;
-        }
-        
-        gameData.move = move;
-        console.log(`[RPS Move] ${socket.id} chose ${move}.`);
-        io.to(to).emit('rps-opponent-moved'); // Notify opponent that this player has moved
-        
-        const partnerGameData = activeGames.get(to);
-        if (partnerGameData && partnerGameData.move) {
-            const winner = determineRPSWinner(gameData.move, partnerGameData.move);
-            
-            let outcomeForSender, outcomeForPartner;
-            if (winner === 'draw') {
-                outcomeForSender = outcomeForPartner = 'draw';
-            } else if (winner === 'player1') { // gameData (sender) is player1
-                outcomeForSender = 'win';
-                outcomeForPartner = 'lose';
-            } else { // partnerGameData (to) is player2
-                outcomeForSender = 'lose';
-                outcomeForPartner = 'win';
-            }
-            
-            io.to(socket.id).emit('rps-result', { 
-                outcome: outcomeForSender, 
-                yourMove: gameData.move, 
-                opponentMove: partnerGameData.move 
-            });
-            
-            io.to(to).emit('rps-result', { 
-                outcome: outcomeForPartner, 
-                yourMove: partnerGameData.move, 
-                opponentMove: gameData.move 
-            });
-            console.log(`[RPS End] Result between ${socket.id} (chose ${gameData.move}) and ${to} (chose ${partnerGameData.move}). Winner: ${winner}.`);
-            
-            activeGames.delete(socket.id);
-            activeGames.delete(to);
-        }
     });
 });
 
@@ -1018,7 +451,6 @@ io.on('connection', (socket) => {
 const adminNs = io.of('/admin');
 adminNs.on('connection', (adminSocket) => {
     console.log(`[Admin] Admin connected: ${adminSocket.id}`);
-
     // Function to get current user status
     const getUserStatus = (id) => {
         if (bannedIds.has(id)) return 'banned';
@@ -1027,7 +459,6 @@ adminNs.on('connection', (adminSocket) => {
         for (const [key, p] of pendingProposals) {
             if (p.a === id || p.b === id) return 'pending_match';
         }
-        if (activeGames.has(id)) return 'in_game';
         return 'online'; // Default for connected but not in specific state
     };
 
@@ -1119,7 +550,6 @@ adminNs.on('connection', (adminSocket) => {
             waitingUsers: waitingUsers.length,
             activePairs: new Set(Array.from(activePartners.values())).size, 
             pendingProposals: pendingProposals.size,
-            activeGames: new Set(Array.from(activeGames.values()).map(game => game.game || game.board || game.partnerId)).size,
             bannedUsers: bannedIds.size
         };
     };
@@ -1138,6 +568,45 @@ adminNs.on('connection', (adminSocket) => {
         console.log(`[Admin] Admin disconnected: ${adminSocket.id}.`);
         clearInterval(adminInterval);
     });
+});
+
+
+// --- Face Search Route ---
+app.post('/face-search', (req, res) => {
+    const { image, gender } = req.body; // image is base64, gender 'male' or 'female'
+    if (!image || !gender) {
+        return res.status(400).json({ error: 'Missing image or gender' });
+    }
+
+    // Simple matching: find users with matching profilePic and gender
+    const matches = [];
+    for (const [socketId, user] of socketIdToUser.entries()) {
+        if (user.profilePic === image && user.gender === gender) {
+            // Create anonymous ID
+            const anonymousId = `anon-${Math.random().toString(36).substr(2, 9)}`;
+            faceSearchMap.set(anonymousId, socketId);
+            matches.push(anonymousId);
+        }
+    }
+
+    res.json({ matches });
+});
+
+// --- Follow via Face Search ---
+app.post('/follow-face', (req, res) => {
+    const { anonymousId, followerId } = req.body;
+    const realId = faceSearchMap.get(anonymousId);
+    if (!realId) {
+        return res.status(404).json({ error: 'Anonymous ID not found' });
+    }
+
+    // Send follow request
+    if (!userFollows.has(followerId)) {
+        userFollows.set(followerId, new Set());
+    }
+    userFollows.get(followerId).add(realId);
+    io.to(realId).emit('followed', { by: followerId, byName: 'Someone' }); // Anonymous
+    res.json({ success: true });
 });
 
 
