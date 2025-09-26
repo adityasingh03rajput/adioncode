@@ -592,21 +592,39 @@ app.post('/face-search', (req, res) => {
     res.json({ matches });
 });
 
-// --- Follow via Face Search ---
-app.post('/follow-face', (req, res) => {
-    const { anonymousId, followerId } = req.body;
-    const realId = faceSearchMap.get(anonymousId);
-    if (!realId) {
-        return res.status(404).json({ error: 'Anonymous ID not found' });
-    }
+// --- Confessions Route ---
+app.get('/confessions', (req, res) => {
+    res.json({ confessions: confessions });
+});
 
-    // Send follow request
-    if (!userFollows.has(followerId)) {
-        userFollows.set(followerId, new Set());
-    }
-    userFollows.get(followerId).add(realId);
-    io.to(realId).emit('followed', { by: followerId, byName: 'Someone' }); // Anonymous
+app.post('/confessions', (req, res) => {
+    const { text } = req.body;
+    if (!text) return res.status(400).json({ error: 'Text required' });
+    const confession = { id: Date.now(), text, reactions: { heart: 0, fire: 0, laugh: 0 }, timestamp: Date.now() };
+    confessions.push(confession);
+    io.emit('new-confession', confession);
     res.json({ success: true });
+});
+
+app.post('/confessions/:id/react', (req, res) => {
+    const { id } = req.params;
+    const { type } = req.body; // heart, fire, laugh
+    const conf = confessions.find(c => c.id == id);
+    if (!conf) return res.status(404).json({ error: 'Not found' });
+    conf.reactions[type]++;
+    io.emit('confession-update', { id, reactions: conf.reactions });
+    res.json({ success: true });
+});
+
+// --- AI Suggestions ---
+app.post('/ai-suggest', (req, res) => {
+    const { about } = req.body;
+    const suggestions = [
+        "Based on your interests, you're a creative coder who loves adventure.",
+        "You seem like a fun person who enjoys music and games.",
+        "Your profile suggests you're thoughtful and kind-hearted."
+    ];
+    res.json({ suggestion: suggestions[Math.floor(Math.random() * suggestions.length)] });
 });
 
 
