@@ -376,6 +376,30 @@ export class SocialRoutes {
         res.json({ success: true, following });
     }
 
+    getFollowRequests(req, res) {
+        const currentUser = req.user;
+        
+        const pendingRequests = [];
+        for (const [id, request] of this.follows.entries()) {
+            if (request.followingId === currentUser.id && request.status === 'pending') {
+                const follower = this.users.get(request.followerId);
+                if (follower) {
+                    pendingRequests.push({
+                        id: request.id,
+                        ...this.server.sanitizeUser(follower),
+                        requestedAt: request.createdAt,
+                        fromRandomMatch: request.fromRandomMatch || false
+                    });
+                }
+            }
+        }
+
+        res.json({ 
+            success: true, 
+            requests: pendingRequests.sort((a, b) => new Date(b.requestedAt) - new Date(a.requestedAt))
+        });
+    }
+
     // 🔍 Search Features
     searchUsers(req, res) {
         const { query, page = 1, limit = 10 } = req.query;
@@ -505,6 +529,26 @@ export class SocialRoutes {
         notification.readAt = new Date();
 
         res.json({ success: true, message: 'Notification marked as read' });
+    }
+
+    markAllNotificationsRead(req, res) {
+        const currentUser = req.user;
+        const now = new Date();
+        
+        let markedCount = 0;
+        currentUser.notifications.forEach(notification => {
+            if (!notification.read) {
+                notification.read = true;
+                notification.readAt = now;
+                markedCount++;
+            }
+        });
+
+        res.json({ 
+            success: true, 
+            message: `${markedCount} notification(s) marked as read`,
+            markedCount 
+        });
     }
 
     deleteNotification(req, res) {

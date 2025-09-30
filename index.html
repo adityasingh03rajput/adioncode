@@ -201,6 +201,193 @@
             min-height: calc(100vh - 70px);
         }
 
+        .secondary-nav {
+            display: flex;
+            gap: 0.5rem;
+            padding: 1rem 1.5rem 0;
+            flex-wrap: wrap;
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .secondary-nav button {
+            padding: 0.5rem 1rem;
+            border-radius: var(--radius);
+            border: 1px solid transparent;
+            background: transparent;
+            color: var(--text-secondary);
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .secondary-nav button.active,
+        .secondary-nav button:hover {
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
+        }
+
+        .app-section {
+            display: none;
+            flex-direction: column;
+            gap: 1rem;
+            padding: 1.5rem;
+            overflow-y: auto;
+        }
+
+        .app-section.active {
+            display: flex;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 1rem;
+            box-shadow: var(--shadow);
+        }
+
+        .inline-group {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+
+        .inline-group input[type="text"],
+        .inline-group input[type="file"] {
+            flex: 1;
+        }
+
+        .results {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        .user-card {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 1rem;
+            gap: 1rem;
+        }
+
+        .user-left {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        .user-left .avatar {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            overflow: hidden;
+            display: grid;
+            place-items: center;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            font-size: 1.5rem;
+        }
+
+        .user-left .avatar img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .user-right {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .btn-sm {
+            padding: 0.35rem 0.75rem;
+            font-size: 0.75rem;
+        }
+
+        .muted {
+            color: var(--text-muted);
+        }
+
+        .confidence {
+            font-weight: 700;
+            color: var(--accent);
+        }
+
+        .badge-list {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        .badge-item {
+            padding: 0.5rem 0.75rem;
+            border-radius: var(--radius);
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            font-weight: 600;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 0.75rem;
+        }
+
+        .stat-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 0.75rem;
+            text-align: center;
+        }
+
+        .stat-card h4 {
+            font-size: 1.75rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .toast-container {
+            position: fixed;
+            top: 90px;
+            right: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            z-index: 999;
+        }
+
+        .toast {
+            padding: 0.75rem 1rem;
+            border-radius: var(--radius);
+            color: white;
+            min-width: 220px;
+            box-shadow: var(--shadow);
+            font-weight: 600;
+            animation: fadeIn 0.2s ease-out;
+        }
+
+        .toast.info { background: var(--primary); }
+        .toast.success { background: var(--success); }
+        .toast.error { background: var(--danger); }
+        .toast.warning { background: var(--warning); color: black; }
+
+        @keyframes fadeIn {I
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
         .sidebar,
         .main-panel,
         .right-panel {
@@ -527,24 +714,125 @@
                         <p id="chatStatus">Connect with someone to start chatting</p>
                     </div>
 
-                    <div id="chatMessages" class="chat-messages">
-                        <div class="message received">
-                            <strong>System:</strong> Welcome! Find a random match or create a room to start chatting.
+                    <div class="secondary-nav" id="secondaryNav">
+                        <button data-target="chatSection" class="active" onclick="switchSection(event)"><i class="fas fa-comments"></i> Chat</button>
+                        <button data-target="postsSection" onclick="switchSection(event)"><i class="fas fa-images"></i> Posts</button>
+                        <button data-target="searchSection" onclick="switchSection(event)"><i class="fas fa-search"></i> Search</button>
+                        <button data-target="notificationsSection" onclick="switchSection(event)"><i class="fas fa-bell"></i> Notifications</button>
+                        <button data-target="profileSection" onclick="switchSection(event)"><i class="fas fa-user"></i> Profile</button>
+                        <button data-target="matchingSection" onclick="switchSection(event)"><i class="fas fa-random"></i> Matching</button>
+                    </div>
+                    
+                    <div class="app-section active" id="chatSection">
+                        <div id="chatMessages" class="chat-messages">
+                            <div class="message received">
+                                <strong>System:</strong> Welcome! Find a random match or create a room to start chatting.
+                            </div>
+                        </div>
+
+                        <div id="typingIndicator" class="typing-indicator" style="display: none;">
+                            Someone is typing...
+                        </div>
+
+                        <div class="chat-input">
+                            <input type="text" id="messageInput" placeholder="Type your message..." disabled>
+                            <button class="btn btn-primary" onclick="sendMessage()" disabled id="sendBtn">
+                                <i class="fas fa-paper-plane"></i>
+                            </button>
+                            <button class="btn btn-secondary" onclick="getSmartReplies()" disabled id="aiBtn">
+                                <i class="fas fa-robot"></i>
+                            </button>
                         </div>
                     </div>
 
-                    <div id="typingIndicator" class="typing-indicator" style="display: none;">
-                        Someone is typing...
+                    <div class="app-section" id="postsSection">
+                        <div class="card">
+                            <h3><i class="fas fa-image"></i> Posts Feed</h3>
+                            <p>Create posts, share images, and engage with your followers.</p>
+                        </div>
+                        <div id="postsHost"></div>
                     </div>
 
-                    <div class="chat-input">
-                        <input type="text" id="messageInput" placeholder="Type your message..." disabled>
-                        <button class="btn btn-primary" onclick="sendMessage()" disabled id="sendBtn">
-                            <i class="fas fa-paper-plane"></i>
-                        </button>
-                        <button class="btn btn-secondary" onclick="getSmartReplies()" disabled id="aiBtn">
-                            <i class="fas fa-robot"></i>
-                        </button>
+                    <div class="app-section" id="searchSection">
+                        <div class="card">
+                            <h3><i class="fas fa-search"></i> Discover People</h3>
+                            <p>Find people by username or upload an image to match profile pictures using face detection.</p>
+                        </div>
+                        <div id="searchHost"></div>
+                    </div>
+
+                    <div class="app-section" id="notificationsSection">
+                        <div class="card">
+                            <h3><i class="fas fa-bell"></i> Notifications</h3>
+                            <p>Stay up to date with likes, comments, badge unlocks, and follow requests.</p>
+                            <div class="inline-group" style="justify-content: space-between;">
+                                <button class="btn btn-outline" onclick="loadNotifications()"><i class="fas fa-sync"></i> Refresh</button>
+                                <button class="btn btn-ghost" onclick="markAllNotificationsRead()"><i class="fas fa-eye"></i> Mark all read</button>
+                            </div>
+                        </div>
+                        <div id="notificationsList" class="results"></div>
+                    </div>
+
+                    <div class="app-section" id="profileSection">
+                        <div class="card">
+                            <h3><i class="fas fa-chart-line"></i> Profile Overview</h3>
+                            <div class="stats-grid">
+                                <div class="stat-card"><h4 id="statPosts">0</h4><p>Posts</p></div>
+                                <div class="stat-card"><h4 id="statFollowers">0</h4><p>Followers</p></div>
+                                <div class="stat-card"><h4 id="statFollowing">0</h4><p>Following</p></div>
+                            </div>
+                            <h4 style="margin-top:1rem;">Badges</h4>
+                            <div id="badgeList" class="badge-list muted">No badges yet.</div>
+                        </div>
+
+                        <div class="card">
+                            <h3><i class="fas fa-user-edit"></i> Edit Profile</h3>
+                            <form id="profileEditForm">
+                                <div class="form-group">
+                                    <label>Bio</label>
+                                    <textarea id="editBio" class="form-control" rows="3" placeholder="Share a short bio"></textarea>
+                                </div>
+                                <div class="form-group">
+                                    <label>Interests (comma separated)</label>
+                                    <input type="text" id="editInterests" class="form-control" placeholder="music, travel, coding">
+                                </div>
+                                <button class="btn btn-primary" type="submit"><i class="fas fa-save"></i> Save Changes</button>
+                            </form>
+                        </div>
+
+                        <div class="card">
+                            <h3><i class="fas fa-camera"></i> Profile Picture</h3>
+                            <form id="profilePictureForm">
+                                <div class="form-group">
+                                    <input type="file" id="profilePictureInput" class="form-control" accept="image/*">
+                                </div>
+                                <button class="btn btn-secondary" type="submit"><i class="fas fa-upload"></i> Upload</button>
+                            </form>
+                        </div>
+                    </div>
+
+                    <div class="app-section" id="matchingSection">
+                        <div class="card">
+                            <h3><i class="fas fa-random"></i> Random Matching</h3>
+                            <p>Select your preference and find a match.</p>
+                            <form id="matchingForm" class="inline-group">
+                                <select id="matchingPreference" class="form-control">
+                                    <option value="both">Any gender</option>
+                                    <option value="female">Only female</option>
+                                    <option value="male">Only male</option>
+                                </select>
+                                <button class="btn btn-primary" type="submit"><i class="fas fa-play"></i> Start</button>
+                            </form>
+                            <div id="matchingStatus" class="muted"></div>
+                            <div id="matchingResult" class="results"></div>
+                        </div>
+
+                        <div class="card">
+                            <h3><i class="fas fa-user-friends"></i> Follow Requests</h3>
+                            <p>Approve or reject pending follow requests.</p>
+                            <button class="btn btn-outline" onclick="loadFollowRequests()"><i class="fas fa-sync"></i> Refresh</button>
+                            <div id="followRequests" class="results"></div>
+                        </div>
                     </div>
                 </div>
 
@@ -877,13 +1165,34 @@
             });
         }
 
+        // Section switching
+        function switchSection(event) {
+            const target = event.currentTarget.getAttribute('data-target');
+            const navButtons = document.querySelectorAll('#secondaryNav button');
+            const appSections = document.querySelectorAll('.app-section');
+            
+            navButtons.forEach(btn => btn.classList.remove('active'));
+            appSections.forEach(section => section.classList.remove('active'));
+            
+            event.currentTarget.classList.add('active');
+            document.getElementById(target).classList.add('active');
+            
+            // Load data for specific sections
+            if (target === 'notificationsSection') loadNotifications();
+            if (target === 'profileSection') loadProfile();
+        }
+
         // Chat functions
         function enableChatInterface() {
             document.getElementById('messageInput').disabled = false;
             document.getElementById('sendBtn').disabled = false;
             document.getElementById('aiBtn').disabled = false;
             document.getElementById('chatTitle').textContent = `Welcome, ${currentUser.username}!`;
-            document.getElementById('chatStatus').textContent = 'Ready to chat';
+            document.getElementById('chatStatus').textContent = 'Choose a section to explore features';
+            
+            // Load initial data
+            loadNotifications();
+            loadProfile();
         }
 
         function sendMessage() {
@@ -1040,6 +1349,260 @@
             showPage('home');
         }
 
+        // Notifications
+        async function loadNotifications() {
+            if (!authToken) return;
+            try {
+                const response = await fetch(`${API_BASE}/notifications`, {
+                    headers: { Authorization: `Bearer ${authToken}` }
+                });
+                const data = await response.json();
+                if (data.success) {
+                    const container = document.getElementById('notificationsList');
+                    container.innerHTML = '';
+                    if (data.notifications.length === 0) {
+                        container.innerHTML = '<div class="muted">No notifications</div>';
+                        return;
+                    }
+                    data.notifications.forEach(notification => {
+                        const item = document.createElement('div');
+                        item.className = 'user-card';
+                        item.innerHTML = `
+                            <div class="user-left">
+                                <div class="avatar"><i class="fas fa-bell"></i></div>
+                                <div>
+                                    <div>${notification.data.message || notification.type}</div>
+                                    <div class="muted">${new Date(notification.createdAt).toLocaleString()}</div>
+                                </div>
+                            </div>`;
+                        container.appendChild(item);
+                    });
+                }
+            } catch (error) {
+                console.error('Error loading notifications:', error);
+            }
+        }
+
+        async function markAllNotificationsRead() {
+            if (!authToken) return;
+            try {
+                await fetch(`${API_BASE}/notifications/mark-read`, {
+                    method: 'PUT',
+                    headers: { Authorization: `Bearer ${authToken}` }
+                });
+                loadNotifications();
+            } catch (error) {
+                console.error('Error marking notifications read:', error);
+            }
+        }
+
+        // Profile
+        async function loadProfile() {
+            if (!authToken || !currentUser) return;
+            try {
+                const response = await fetch(`${API_BASE}/profile/${currentUser.id}`, {
+                    headers: { Authorization: `Bearer ${authToken}` }
+                });
+                const data = await response.json();
+                if (data.success) {
+                    const profile = data.profile;
+                    document.getElementById('statPosts').textContent = profile.posts?.length || 0;
+                    document.getElementById('statFollowers').textContent = profile.followers?.length || 0;
+                    document.getElementById('statFollowing').textContent = profile.following?.length || 0;
+                    
+                    // Load badges
+                    const badgeResponse = await fetch(`${API_BASE}/badges/${currentUser.id}`, {
+                        headers: { Authorization: `Bearer ${authToken}` }
+                    });
+                    const badgeData = await badgeResponse.json();
+                    if (badgeData.success && badgeData.badges.length > 0) {
+                        const badgeList = document.getElementById('badgeList');
+                        badgeList.innerHTML = '';
+                        badgeData.badges.forEach(badge => {
+                            const badgeItem = document.createElement('div');
+                            badgeItem.className = 'badge-item';
+                            badgeItem.textContent = badge.replace('_', ' ').toUpperCase();
+                            badgeList.appendChild(badgeItem);
+                        });
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading profile:', error);
+            }
+        }
+
+        // Profile edit form
+        document.getElementById('profileEditForm')?.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!authToken) return;
+            const formData = {
+                bio: document.getElementById('editBio').value,
+                interests: document.getElementById('editInterests').value.split(',').map(i => i.trim())
+            };
+            try {
+                const response = await fetch(`${API_BASE}/profile/edit`, {
+                    method: 'PUT',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${authToken}`
+                    },
+                    body: JSON.stringify(formData)
+                });
+                const data = await response.json();
+                if (data.success) {
+                    alert('Profile updated successfully');
+                    loadProfile();
+                } else {
+                    alert(data.error || 'Failed to update profile');
+                }
+            } catch (error) {
+                alert('Error updating profile');
+            }
+        });
+
+        // Profile picture upload
+        document.getElementById('profilePictureForm')?.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!authToken) return;
+            const fileInput = document.getElementById('profilePictureInput');
+            const file = fileInput.files[0];
+            if (!file) {
+                alert('Please select a file');
+                return;
+            }
+            const formData = new FormData();
+            formData.append('profilePicture', file);
+            try {
+                const response = await fetch(`${API_BASE}/profile/upload-picture`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${authToken}` },
+                    body: formData
+                });
+                const data = await response.json();
+                if (data.success) {
+                    alert('Profile picture updated successfully');
+                    loadProfile();
+                } else {
+                    alert(data.error || 'Failed to update profile picture');
+                }
+            } catch (error) {
+                alert('Error updating profile picture');
+            }
+        });
+
+        // Matching form
+        document.getElementById('matchingForm')?.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!authToken) return;
+            const preference = document.getElementById('matchingPreference').value;
+            document.getElementById('matchingStatus').textContent = 'Finding match...';
+            try {
+                const response = await fetch(`${API_BASE}/social/find-match-enhanced`, {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${authToken}`
+                    },
+                    body: JSON.stringify({ genderPreference: preference })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    document.getElementById('matchingStatus').textContent = 'Match found!';
+                    const resultDiv = document.getElementById('matchingResult');
+                    resultDiv.innerHTML = `
+                        <div class="user-card">
+                            <div class="user-left">
+                                <div class="avatar"><i class="fas fa-user"></i></div>
+                                <div>
+                                    <div>${data.match.username}</div>
+                                    <div class="muted">${data.match.bio || 'No bio'}</div>
+                                </div>
+                            </div>
+                            <div class="user-right">
+                                <button class="btn btn-primary btn-sm" onclick="startChatWithMatch('${data.roomId}')">Chat</button>
+                            </div>
+                        </div>`;
+                } else {
+                    document.getElementById('matchingStatus').textContent = data.message || 'No match found';
+                }
+            } catch (error) {
+                document.getElementById('matchingStatus').textContent = 'Error finding match';
+            }
+        });
+
+        function startChatWithMatch(roomId) {
+            currentRoom = roomId;
+            socket.emit('join_room', roomId);
+            document.querySelector('[data-target="chatSection"]').click();
+        }
+
+        // Follow requests
+        async function loadFollowRequests() {
+            if (!authToken) return;
+            try {
+                const response = await fetch(`${API_BASE}/follow/requests`, {
+                    headers: { Authorization: `Bearer ${authToken}` }
+                });
+                const data = await response.json();
+                if (data.success) {
+                    const container = document.getElementById('followRequests');
+                    container.innerHTML = '';
+                    if (data.requests.length === 0) {
+                        container.innerHTML = '<div class="muted">No pending requests</div>';
+                        return;
+                    }
+                    data.requests.forEach(request => {
+                        const item = document.createElement('div');
+                        item.className = 'user-card';
+                        item.innerHTML = `
+                            <div class="user-left">
+                                <div class="avatar"><i class="fas fa-user"></i></div>
+                                <div>${request.username}</div>
+                            </div>
+                            <div class="user-right">
+                                <button class="btn btn-primary btn-sm" onclick="acceptFollowRequest('${request.id}')">Accept</button>
+                                <button class="btn btn-outline btn-sm" onclick="rejectFollowRequest('${request.id}')">Reject</button>
+                            </div>`;
+                        container.appendChild(item);
+                    });
+                }
+            } catch (error) {
+                console.error('Error loading follow requests:', error);
+            }
+        }
+
+        async function acceptFollowRequest(requestId) {
+            if (!authToken) return;
+            try {
+                const response = await fetch(`${API_BASE}/follow/accept/${requestId}`, {
+                    method: 'POST',
+                    headers: { Authorization: `Bearer ${authToken}` }
+                });
+                const data = await response.json();
+                if (data.success) {
+                    loadFollowRequests();
+                }
+            } catch (error) {
+                console.error('Error accepting follow request:', error);
+            }
+        }
+
+        async function rejectFollowRequest(requestId) {
+            if (!authToken) return;
+            try {
+                const response = await fetch(`${API_BASE}/follow/reject/${requestId}`, {
+                    method: 'POST',
+                    headers: { Authorization: `Bearer ${authToken}` }
+                });
+                const data = await response.json();
+                if (data.success) {
+                    loadFollowRequests();
+                }
+            } catch (error) {
+                console.error('Error rejecting follow request:', error);
+            }
+        }
+
         // Click outside modal to close
         document.addEventListener('click', function (e) {
             if (e.target.classList.contains('modal')) {
@@ -1053,3 +1616,4 @@
 </body>
 
 </html>
+

@@ -54,7 +54,7 @@ class PostsManager {
             </div>
         `;
 
-        const mount = document.querySelector('#chat .main-panel') || document.querySelector('.main-panel') || document.body;
+        const mount = document.getElementById('postsHost') || document.querySelector('#chat .main-panel') || document.querySelector('.main-panel') || document.body;
         mount.insertAdjacentHTML('beforeend', postsHTML);
         this.bindPostsEvents();
     }

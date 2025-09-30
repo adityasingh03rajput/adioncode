@@ -14,6 +14,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import sharp from 'sharp';
 import fs from 'fs/promises';
+import { SocialRoutes } from './routes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -63,6 +64,7 @@ class IntrovertServer {
         this.randomMatchQueue = new Map();
 
         this.initializeUploadConfig();
+        this.socialRoutes = new SocialRoutes(this);
         this.initializeMiddleware();
         this.initializeRoutes();
         this.initializeSocketHandlers();
@@ -152,6 +154,7 @@ class IntrovertServer {
         this.app.use(express.urlencoded({ extended: true, limit: '10mb' }));
         this.app.use(cookieParser());
         this.app.use(express.static(__dirname));
+        this.app.use('/uploads', express.static(join(__dirname, 'uploads')));
         this.app.use('/api/auth', authLimiter);
         this.app.use('/api', limiter);
 
@@ -234,6 +237,7 @@ class IntrovertServer {
 
         // Social features
         this.app.post('/api/social/find-match', this.authenticateToken, this.findRandomMatch.bind(this));
+        this.app.post('/api/social/find-match-enhanced', this.authenticateToken, this.socialRoutes.findMatchEnhanced.bind(this.socialRoutes));
         this.app.post('/api/social/create-room', this.authenticateToken, this.createChatRoom.bind(this));
 
         // AI features
@@ -246,38 +250,40 @@ class IntrovertServer {
         this.app.post('/api/party/:id/join', this.authenticateToken, this.joinWatchParty.bind(this));
 
         // Posts and Social Features
-        this.app.post('/api/posts/create', this.authenticateToken, this.createPost.bind(this));
-        this.app.get('/api/posts/feed', this.authenticateToken, this.getFeed.bind(this));
-        this.app.get('/api/posts/:id', this.authenticateToken, this.getPost.bind(this));
-        this.app.post('/api/posts/:id/like', this.authenticateToken, this.likePost.bind(this));
-        this.app.post('/api/posts/:id/comment', this.authenticateToken, this.commentPost.bind(this));
-        this.app.delete('/api/posts/:id', this.authenticateToken, this.deletePost.bind(this));
+        this.app.post('/api/posts/create', this.authenticateToken, this.socialRoutes.createPost.bind(this.socialRoutes));
+        this.app.get('/api/posts/feed', this.authenticateToken, this.socialRoutes.getFeed.bind(this.socialRoutes));
+        this.app.get('/api/posts/:id', this.authenticateToken, this.socialRoutes.getPost.bind(this.socialRoutes));
+        this.app.post('/api/posts/:id/like', this.authenticateToken, this.socialRoutes.likePost.bind(this.socialRoutes));
+        this.app.post('/api/posts/:id/comment', this.authenticateToken, this.socialRoutes.commentPost.bind(this.socialRoutes));
+        this.app.delete('/api/posts/:id', this.authenticateToken, this.socialRoutes.deletePost.bind(this.socialRoutes));
 
         // Follow System
-        this.app.post('/api/follow/:userId', this.authenticateToken, this.followUser.bind(this));
-        this.app.post('/api/unfollow/:userId', this.authenticateToken, this.unfollowUser.bind(this));
-        this.app.get('/api/followers/:userId', this.authenticateToken, this.getFollowers.bind(this));
-        this.app.get('/api/following/:userId', this.authenticateToken, this.getFollowing.bind(this));
-        this.app.post('/api/follow/accept/:userId', this.authenticateToken, this.acceptFollowRequest.bind(this));
-        this.app.post('/api/follow/reject/:userId', this.authenticateToken, this.rejectFollowRequest.bind(this));
+        this.app.post('/api/follow/:userId', this.authenticateToken, this.socialRoutes.followUser.bind(this.socialRoutes));
+        this.app.post('/api/unfollow/:userId', this.authenticateToken, this.socialRoutes.unfollowUser.bind(this.socialRoutes));
+        this.app.get('/api/followers/:userId', this.authenticateToken, this.socialRoutes.getFollowers.bind(this.socialRoutes));
+        this.app.get('/api/following/:userId', this.authenticateToken, this.socialRoutes.getFollowing.bind(this.socialRoutes));
+        this.app.get('/api/follow/requests', this.authenticateToken, this.socialRoutes.getFollowRequests.bind(this.socialRoutes));
+        this.app.post('/api/follow/accept/:userId', this.authenticateToken, this.socialRoutes.acceptFollowRequest.bind(this.socialRoutes));
+        this.app.post('/api/follow/reject/:userId', this.authenticateToken, this.socialRoutes.rejectFollowRequest.bind(this.socialRoutes));
 
         // Search Features
-        this.app.get('/api/search/users', this.authenticateToken, this.searchUsers.bind(this));
-        this.app.post('/api/search/face', this.authenticateToken, this.searchByFace.bind(this));
-        this.app.get('/api/search/history', this.authenticateToken, this.getSearchHistory.bind(this));
+        this.app.get('/api/search/users', this.authenticateToken, this.socialRoutes.searchUsers.bind(this.socialRoutes));
+        this.app.post('/api/search/face', this.authenticateToken, this.socialRoutes.searchByFace.bind(this.socialRoutes));
+        this.app.get('/api/search/history', this.authenticateToken, this.socialRoutes.getSearchHistory.bind(this.socialRoutes));
 
         // Notifications
-        this.app.get('/api/notifications', this.authenticateToken, this.getNotifications.bind(this));
-        this.app.post('/api/notifications/:id/read', this.authenticateToken, this.markNotificationRead.bind(this));
-        this.app.delete('/api/notifications/:id', this.authenticateToken, this.deleteNotification.bind(this));
+        this.app.get('/api/notifications', this.authenticateToken, this.socialRoutes.getNotifications.bind(this.socialRoutes));
+        this.app.put('/api/notifications/mark-read', this.authenticateToken, this.socialRoutes.markAllNotificationsRead.bind(this.socialRoutes));
+        this.app.post('/api/notifications/:id/read', this.authenticateToken, this.socialRoutes.markNotificationRead.bind(this.socialRoutes));
+        this.app.delete('/api/notifications/:id', this.authenticateToken, this.socialRoutes.deleteNotification.bind(this.socialRoutes));
 
         // Profile Management
-        this.app.post('/api/profile/upload-picture', this.authenticateToken, this.uploadProfilePicture.bind(this));
-        this.app.get('/api/profile/:userId', this.authenticateToken, this.getProfile.bind(this));
-        this.app.put('/api/profile/edit', this.authenticateToken, this.editProfile.bind(this));
+        this.app.post('/api/profile/upload-picture', this.authenticateToken, this.socialRoutes.uploadProfilePicture.bind(this.socialRoutes));
+        this.app.get('/api/profile/:userId', this.authenticateToken, this.socialRoutes.getProfile.bind(this.socialRoutes));
+        this.app.put('/api/profile/edit', this.authenticateToken, this.socialRoutes.editProfile.bind(this.socialRoutes));
 
         // Badge System
-        this.app.get('/api/badges/:userId', this.authenticateToken, this.getUserBadges.bind(this));
+        this.app.get('/api/badges/:userId', this.authenticateToken, this.socialRoutes.getUserBadges.bind(this.socialRoutes));
 
         this.logSuccess('🌐 API routes initialized');
     }
