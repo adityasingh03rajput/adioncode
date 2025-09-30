@@ -588,13 +588,18 @@
                     INTROVERT
                 </a>
                 <ul class="nav-links">
-                    <li><a href="#home" onclick="showPage('home')"><i class="fas fa-home"></i> Home</a></li>
+                    <li><a href="#home" onclick="navigateHome(event)"><i class="fas fa-home"></i> Home</a></li>
                     <li><a href="#features" onclick="showPage('features')"><i class="fas fa-star"></i> Features</a></li>
                     <li><a href="#about" onclick="showPage('about')"><i class="fas fa-info"></i> About</a></li>
+                    <li id="dashboardLink" style="display:none;"><a href="#chat" onclick="showPage('chat')"><i class="fas fa-dashboard"></i> Dashboard</a></li>
                 </ul>
-                <div class="nav-actions">
+                <div class="nav-actions" id="authButtons">
                     <button class="btn btn-outline" onclick="showModal('loginModal')">Login</button>
                     <button class="btn btn-primary" onclick="showModal('registerModal')">Join Now</button>
+                </div>
+                <div class="nav-actions" id="userMenu" style="display:none;">
+                    <span id="userGreeting" style="margin-right: 1rem; color: var(--text-secondary);"></span>
+                    <button class="btn btn-outline" onclick="logout()"><i class="fas fa-sign-out-alt"></i> Logout</button>
                 </div>
             </nav>
         </div>
@@ -610,10 +615,10 @@
                     <p>Experience genuine connections without the pressure of identity. Chat, share, and discover in a
                         safe, anonymous environment powered by AI.</p>
                     <div class="hero-buttons">
-                        <button class="btn btn-primary" onclick="showModal('registerModal')">
+                        <button class="btn btn-primary" onclick="handleStartChatting()">
                             <i class="fas fa-rocket"></i> Start Chatting
                         </button>
-                        <button class="btn btn-outline" onclick="findRandomMatch()">
+                        <button class="btn btn-outline" onclick="handleRandomMatch()">
                             <i class="fas fa-dice"></i> Random Match
                         </button>
                     </div>
@@ -851,8 +856,16 @@
                     <button class="btn btn-outline" style="width: 100%; margin-bottom: 0.5rem;" onclick="openCanvas()">
                         <i class="fas fa-palette"></i> Collaborative Canvas
                     </button>
-                    <button class="btn btn-outline" style="width: 100%;" onclick="translateLastMessage()">
+                    <button class="btn btn-outline" style="width: 100%; margin-bottom: 0.5rem;" onclick="translateLastMessage()">
                         <i class="fas fa-language"></i> Translate
+                    </button>
+                    
+                    <h4 style="margin-top: 1rem;">Call Features</h4>
+                    <button class="btn btn-primary" style="width: 100%; margin-bottom: 0.5rem;" onclick="startVideoCall()" id="videoCallBtn" disabled>
+                        <i class="fas fa-video"></i> Video Call
+                    </button>
+                    <button class="btn btn-secondary" style="width: 100%;" onclick="startVoiceCall()" id="voiceCallBtn" disabled>
+                        <i class="fas fa-phone"></i> Voice Call
                     </button>
                 </div>
             </div>
@@ -918,6 +931,96 @@
         </div>
     </div>
 
+    <!-- Watch Party Modal -->
+    <div id="watchPartyModal" class="modal">
+        <div class="modal-content">
+            <h3><i class="fas fa-video"></i> Watch Party</h3>
+            <div class="form-group">
+                <label>YouTube Video URL</label>
+                <input type="text" class="form-control" id="videoUrl" placeholder="https://youtube.com/watch?v=...">
+            </div>
+            <div id="videoPlayer" style="margin: 1rem 0;"></div>
+            <div style="display: flex; gap: 1rem; justify-content: flex-end;">
+                <button type="button" class="btn btn-ghost" onclick="hideModal('watchPartyModal')">Close</button>
+                <button type="button" class="btn btn-primary" onclick="loadVideo()">Load Video</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Canvas Modal -->
+    <div id="canvasModal" class="modal">
+        <div class="modal-content" style="max-width: 800px;">
+            <h3><i class="fas fa-palette"></i> Collaborative Canvas</h3>
+            <div style="border: 2px solid var(--border); border-radius: var(--radius); margin: 1rem 0;">
+                <canvas id="drawingCanvas" width="750" height="500" style="display: block; cursor: crosshair;"></canvas>
+            </div>
+            <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap;">
+                <button class="btn btn-sm" onclick="setDrawColor('black')">⚫ Black</button>
+                <button class="btn btn-sm" onclick="setDrawColor('red')">🔴 Red</button>
+                <button class="btn btn-sm" onclick="setDrawColor('blue')">🔵 Blue</button>
+                <button class="btn btn-sm" onclick="setDrawColor('green')">🟢 Green</button>
+                <button class="btn btn-sm" onclick="setDrawColor('yellow')">🟡 Yellow</button>
+                <button class="btn btn-sm btn-outline" onclick="clearCanvas()">🗑️ Clear</button>
+            </div>
+            <div style="display: flex; gap: 1rem; justify-content: flex-end;">
+                <button type="button" class="btn btn-ghost" onclick="hideModal('canvasModal')">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Translation Modal -->
+    <div id="translationModal" class="modal">
+        <div class="modal-content">
+            <h3><i class="fas fa-language"></i> Translate Message</h3>
+            <div class="form-group">
+                <label>Original Message</label>
+                <textarea id="originalText" class="form-control" rows="3" readonly></textarea>
+            </div>
+            <div class="form-group">
+                <label>Target Language</label>
+                <select id="targetLanguage" class="form-control">
+                    <option value="es">Spanish</option>
+                    <option value="fr">French</option>
+                    <option value="de">German</option>
+                    <option value="hi">Hindi</option>
+                    <option value="zh">Chinese</option>
+                    <option value="ja">Japanese</option>
+                    <option value="ar">Arabic</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Translated Message</label>
+                <textarea id="translatedText" class="form-control" rows="3" readonly></textarea>
+            </div>
+            <div style="display: flex; gap: 1rem; justify-content: flex-end;">
+                <button type="button" class="btn btn-ghost" onclick="hideModal('translationModal')">Close</button>
+                <button type="button" class="btn btn-primary" onclick="performTranslation()">Translate</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Video Call Modal -->
+    <div id="videoCallModal" class="modal">
+        <div class="modal-content" style="max-width: 900px;">
+            <h3><i class="fas fa-video"></i> Video Call</h3>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1rem 0;">
+                <div style="position: relative; background: black; border-radius: var(--radius); overflow: hidden; aspect-ratio: 4/3;">
+                    <video id="localVideo" autoplay muted style="width: 100%; height: 100%; object-fit: cover;"></video>
+                    <div style="position: absolute; bottom: 10px; left: 10px; color: white; background: rgba(0,0,0,0.5); padding: 0.5rem; border-radius: 0.5rem;">You</div>
+                </div>
+                <div style="position: relative; background: black; border-radius: var(--radius); overflow: hidden; aspect-ratio: 4/3;">
+                    <video id="remoteVideo" autoplay style="width: 100%; height: 100%; object-fit: cover;"></video>
+                    <div style="position: absolute; bottom: 10px; left: 10px; color: white; background: rgba(0,0,0,0.5); padding: 0.5rem; border-radius: 0.5rem;">Partner</div>
+                </div>
+            </div>
+            <div style="display: flex; gap: 1rem; justify-content: center; margin-top: 1rem;">
+                <button class="btn btn-outline" onclick="toggleMute()" id="muteBtn"><i class="fas fa-microphone"></i> Mute</button>
+                <button class="btn btn-outline" onclick="toggleVideo()" id="videoToggleBtn"><i class="fas fa-video"></i> Stop Video</button>
+                <button class="btn btn-danger" onclick="endCall()"><i class="fas fa-phone-slash"></i> End Call</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Socket.IO -->
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
     <script>
@@ -944,8 +1047,19 @@
             // Check for existing auth token
             authToken = localStorage.getItem('authToken');
             if (authToken) {
-                connectSocket();
+                // Try to get user info from token
+                try {
+                    const payload = JSON.parse(atob(authToken.split('.')[1]));
+                    currentUser = { id: payload.userId, username: payload.username || 'User' };
+                    updateAuthUI();
+                    connectSocket();
+                } catch (e) {
+                    // Invalid token, clear it
+                    localStorage.removeItem('authToken');
+                    authToken = null;
+                }
             }
+            updateAuthUI();
 
             // Setup form handlers
             setupFormHandlers();
@@ -1070,6 +1184,57 @@
             socket.on('user_stop_typing', () => {
                 hideTypingIndicator();
             });
+
+            // WebRTC signaling
+            socket.on('call_offer', async (data) => {
+                if (peerConnection) {
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+                    const answer = await peerConnection.createAnswer();
+                    await peerConnection.setLocalDescription(answer);
+                    socket.emit('call_answer', { roomId: currentRoom, answer });
+                }
+            });
+
+            socket.on('call_answer', async (data) => {
+                if (peerConnection) {
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+                }
+            });
+
+            socket.on('ice_candidate', async (data) => {
+                if (peerConnection) {
+                    await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+                }
+            });
+
+            socket.on('call_end', () => {
+                endCall();
+            });
+
+            // Canvas events
+            socket.on('canvas_draw', (data) => {
+                if (ctx && data.roomId === currentRoom) {
+                    ctx.strokeStyle = data.color;
+                    ctx.lineTo(data.x, data.y);
+                    ctx.stroke();
+                }
+            });
+
+            socket.on('canvas_clear', (data) => {
+                if (ctx && canvas && data.roomId === currentRoom) {
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                }
+            });
+
+            // Watch party events
+            socket.on('watch_party_start', (data) => {
+                if (data.roomId === currentRoom && data.videoId) {
+                    const player = document.getElementById('videoPlayer');
+                    if (player) {
+                        player.innerHTML = `<iframe width="100%" height="315" src="https://www.youtube.com/embed/${data.videoId}?enablejsapi=1" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`;
+                    }
+                }
+            });
         }
 
         // Page navigation
@@ -1114,6 +1279,7 @@
                         currentUser = data.user;
                         localStorage.setItem('authToken', authToken);
                         hideModal('loginModal');
+                        updateAuthUI();
                         showPage('chat');
                         connectSocket();
                         enableChatInterface();
@@ -1153,6 +1319,7 @@
                         currentUser = data.user;
                         localStorage.setItem('authToken', authToken);
                         hideModal('registerModal');
+                        updateAuthUI();
                         showPage('chat');
                         connectSocket();
                         enableChatInterface();
@@ -1320,21 +1487,327 @@
             document.getElementById('typingIndicator').style.display = 'none';
         }
 
-        // Placeholder functions for additional features
-        function createRoom() {
-            alert('Room creation feature coming soon!');
+        // Navigation helpers
+        function navigateHome(event) {
+            event.preventDefault();
+            if (authToken) {
+                // If logged in, just show home page without logging out
+                showPage('home');
+            } else {
+                showPage('home');
+            }
         }
 
+        function handleStartChatting() {
+            if (authToken) {
+                showPage('chat');
+            } else {
+                showModal('registerModal');
+            }
+        }
+
+        function handleRandomMatch() {
+            if (authToken) {
+                showPage('chat');
+                findRandomMatch();
+            } else {
+                showModal('loginModal');
+            }
+        }
+
+        // Update UI based on auth state
+        function updateAuthUI() {
+            if (authToken && currentUser) {
+                document.getElementById('authButtons').style.display = 'none';
+                document.getElementById('userMenu').style.display = 'flex';
+                document.getElementById('dashboardLink').style.display = 'block';
+                document.getElementById('userGreeting').textContent = `Hello, ${currentUser.username}`;
+            } else {
+                document.getElementById('authButtons').style.display = 'flex';
+                document.getElementById('userMenu').style.display = 'none';
+                document.getElementById('dashboardLink').style.display = 'none';
+            }
+        }
+
+        // Room creation
+        async function createRoom() {
+            if (!authToken) {
+                showModal('loginModal');
+                return;
+            }
+            const roomName = prompt('Enter room name:');
+            if (!roomName) return;
+            
+            try {
+                const response = await fetch(`${API_BASE}/social/create-room`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${authToken}`
+                    },
+                    body: JSON.stringify({ roomName })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    currentRoom = data.roomId;
+                    socket.emit('join_room', currentRoom);
+                    document.getElementById('chatTitle').textContent = `Room: ${roomName}`;
+                    document.getElementById('chatStatus').textContent = 'Room created';
+                    alert('Room created successfully!');
+                } else {
+                    alert(data.error || 'Failed to create room');
+                }
+            } catch (error) {
+                alert('Error creating room');
+            }
+        }
+
+        // Watch Party
+        let currentVideoId = null;
         function startWatchParty() {
-            alert('Watch Party feature coming soon!');
+            if (!currentRoom) {
+                alert('Join a room first to start a watch party');
+                return;
+            }
+            showModal('watchPartyModal');
         }
 
+        function loadVideo() {
+            const url = document.getElementById('videoUrl').value;
+            const videoId = extractYouTubeId(url);
+            if (!videoId) {
+                alert('Invalid YouTube URL');
+                return;
+            }
+            currentVideoId = videoId;
+            const player = document.getElementById('videoPlayer');
+            player.innerHTML = `<iframe width="100%" height="315" src="https://www.youtube.com/embed/${videoId}?enablejsapi=1" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`;
+            
+            if (socket && currentRoom) {
+                socket.emit('watch_party_start', { roomId: currentRoom, videoId });
+            }
+        }
+
+        function extractYouTubeId(url) {
+            const regExp = /^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*/;
+            const match = url.match(regExp);
+            return (match && match[7].length == 11) ? match[7] : null;
+        }
+
+        // Collaborative Canvas
+        let canvas, ctx, isDrawing = false, currentColor = 'black';
         function openCanvas() {
-            alert('Collaborative Canvas feature coming soon!');
+            if (!currentRoom) {
+                alert('Join a room first to use collaborative canvas');
+                return;
+            }
+            showModal('canvasModal');
+            setTimeout(() => {
+                canvas = document.getElementById('drawingCanvas');
+                ctx = canvas.getContext('2d');
+                ctx.lineWidth = 3;
+                ctx.lineCap = 'round';
+                
+                canvas.addEventListener('mousedown', startDrawing);
+                canvas.addEventListener('mousemove', draw);
+                canvas.addEventListener('mouseup', stopDrawing);
+                canvas.addEventListener('mouseout', stopDrawing);
+            }, 100);
         }
 
-        function translateLastMessage() {
-            alert('Translation feature coming soon!');
+        function startDrawing(e) {
+            isDrawing = true;
+            const rect = canvas.getBoundingClientRect();
+            ctx.beginPath();
+            ctx.moveTo(e.clientX - rect.left, e.clientY - rect.top);
+        }
+
+        function draw(e) {
+            if (!isDrawing) return;
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            
+            ctx.strokeStyle = currentColor;
+            ctx.lineTo(x, y);
+            ctx.stroke();
+            
+            if (socket && currentRoom) {
+                socket.emit('canvas_draw', { roomId: currentRoom, x, y, color: currentColor });
+            }
+        }
+
+        function stopDrawing() {
+            isDrawing = false;
+        }
+
+        function setDrawColor(color) {
+            currentColor = color;
+        }
+
+        function clearCanvas() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            if (socket && currentRoom) {
+                socket.emit('canvas_clear', { roomId: currentRoom });
+            }
+        }
+
+        // Translation
+        async function translateLastMessage() {
+            const messages = document.querySelectorAll('.message');
+            if (messages.length === 0) {
+                alert('No messages to translate');
+                return;
+            }
+            const lastMessage = messages[messages.length - 1];
+            const messageText = lastMessage.textContent.split(':')[1]?.trim();
+            if (!messageText) return;
+            
+            document.getElementById('originalText').value = messageText;
+            document.getElementById('translatedText').value = '';
+            showModal('translationModal');
+        }
+
+        async function performTranslation() {
+            const text = document.getElementById('originalText').value;
+            const targetLang = document.getElementById('targetLanguage').value;
+            
+            if (!authToken) return;
+            
+            try {
+                const response = await fetch(`${API_BASE}/ai/translate`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${authToken}`
+                    },
+                    body: JSON.stringify({ text, targetLanguage: targetLang })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    document.getElementById('translatedText').value = data.translatedText;
+                } else {
+                    alert('Translation failed');
+                }
+            } catch (error) {
+                alert('Error translating message');
+            }
+        }
+
+        // Video/Voice Call with WebRTC
+        let localStream = null;
+        let remoteStream = null;
+        let peerConnection = null;
+        let isMuted = false;
+        let isVideoEnabled = true;
+
+        async function startVideoCall() {
+            if (!currentRoom) {
+                alert('Join a room first to start a video call');
+                return;
+            }
+            showModal('videoCallModal');
+            await initializeCall(true);
+        }
+
+        async function startVoiceCall() {
+            if (!currentRoom) {
+                alert('Join a room first to start a voice call');
+                return;
+            }
+            showModal('videoCallModal');
+            await initializeCall(false);
+        }
+
+        async function initializeCall(includeVideo) {
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({
+                    video: includeVideo,
+                    audio: true
+                });
+                document.getElementById('localVideo').srcObject = localStream;
+                
+                // Enable call buttons
+                document.getElementById('videoCallBtn').disabled = false;
+                document.getElementById('voiceCallBtn').disabled = false;
+                
+                // Setup WebRTC
+                const configuration = {
+                    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                };
+                peerConnection = new RTCPeerConnection(configuration);
+                
+                localStream.getTracks().forEach(track => {
+                    peerConnection.addTrack(track, localStream);
+                });
+                
+                peerConnection.ontrack = (event) => {
+                    remoteStream = event.streams[0];
+                    document.getElementById('remoteVideo').srcObject = remoteStream;
+                };
+                
+                peerConnection.onicecandidate = (event) => {
+                    if (event.candidate && socket && currentRoom) {
+                        socket.emit('ice_candidate', {
+                            roomId: currentRoom,
+                            candidate: event.candidate
+                        });
+                    }
+                };
+                
+                // Create offer
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+                
+                if (socket && currentRoom) {
+                    socket.emit('call_offer', {
+                        roomId: currentRoom,
+                        offer: offer
+                    });
+                }
+            } catch (error) {
+                console.error('Error starting call:', error);
+                alert('Failed to access camera/microphone');
+            }
+        }
+
+        function toggleMute() {
+            if (!localStream) return;
+            isMuted = !isMuted;
+            localStream.getAudioTracks().forEach(track => {
+                track.enabled = !isMuted;
+            });
+            document.getElementById('muteBtn').innerHTML = isMuted ? 
+                '<i class="fas fa-microphone-slash"></i> Unmute' : 
+                '<i class="fas fa-microphone"></i> Mute';
+        }
+
+        function toggleVideo() {
+            if (!localStream) return;
+            isVideoEnabled = !isVideoEnabled;
+            localStream.getVideoTracks().forEach(track => {
+                track.enabled = isVideoEnabled;
+            });
+            document.getElementById('videoToggleBtn').innerHTML = isVideoEnabled ? 
+                '<i class="fas fa-video-slash"></i> Stop Video' : 
+                '<i class="fas fa-video"></i> Start Video';
+        }
+
+        function endCall() {
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+            }
+            if (peerConnection) {
+                peerConnection.close();
+            }
+            localStream = null;
+            remoteStream = null;
+            peerConnection = null;
+            hideModal('videoCallModal');
+            
+            if (socket && currentRoom) {
+                socket.emit('call_end', { roomId: currentRoom });
+            }
         }
 
         function logout() {
@@ -1346,6 +1819,7 @@
                 socket.disconnect();
                 socket = null;
             }
+            updateAuthUI();
             showPage('home');
         }
 
