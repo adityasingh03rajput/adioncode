@@ -99,16 +99,38 @@ class IntrovertServer {
     }
 
     initializeMiddleware() {
-        this.app.use(helmet({ contentSecurityPolicy: false }));
+        // CORS must be first - CRITICAL FIX
+        this.app.use((req, res, next) => {
+            res.header('Access-Control-Allow-Origin', '*');
+            res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+            res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Cookie');
+            res.header('Access-Control-Allow-Credentials', 'true');
+            res.header('Access-Control-Expose-Headers', 'Content-Length, Content-Type');
+            
+            if (req.method === 'OPTIONS') {
+                return res.status(200).end();
+            }
+            next();
+        });
+
+        this.app.use(helmet({ 
+            contentSecurityPolicy: false,
+            crossOriginEmbedderPolicy: false,
+            crossOriginResourcePolicy: false
+        }));
+        
         this.app.use(cors({
-            origin: '*',
+            origin: true,
             credentials: true,
-            methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+            methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+            allowedHeaders: ["Origin", "X-Requested-With", "Content-Type", "Accept", "Authorization", "Cookie"]
         }));
 
         const limiter = rateLimit({
             windowMs: 15 * 60 * 1000,
-            max: 200
+            max: 500,
+            standardHeaders: true,
+            legacyHeaders: false
         });
 
         this.app.use(compression());
@@ -119,18 +141,7 @@ class IntrovertServer {
         this.app.use('/uploads', express.static(join(__dirname, 'uploads')));
         this.app.use('/api', limiter);
 
-        // CORS headers
-        this.app.use((req, res, next) => {
-            res.header('Access-Control-Allow-Origin', '*');
-            res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-            res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-            if (req.method === 'OPTIONS') {
-                return res.sendStatus(200);
-            }
-            next();
-        });
-
-        console.log('✅ Middleware initialized');
+        console.log('✅ Middleware initialized with enhanced CORS');
     }
 
     initializeRoutes() {
