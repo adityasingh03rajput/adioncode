@@ -10,69 +10,74 @@ class PostsManager {
     initializePostsUI() {
         // Create posts section in the main container
         const postsHTML = `
-            <div id="posts-section" class="section hidden">
-                <div class="posts-header">
-                    <h2><i class="fas fa-images"></i> Posts</h2>
+            <div class="card" style="margin-bottom: 1rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <h3><i class="fas fa-images"></i> Create Post</h3>
                     <button id="create-post-btn" class="btn btn-primary">
-                        <i class="fas fa-plus"></i> Create Post
+                        <i class="fas fa-plus"></i> New Post
                     </button>
                 </div>
-                
-                <div id="create-post-modal" class="modal hidden">
-                    <div class="modal-content">
-                        <div class="modal-header">
-                            <h3>Create New Post</h3>
-                            <span class="close">&times;</span>
+            </div>
+            
+            <div id="create-post-modal" class="modal">
+                <div class="modal-content">
+                    <h3>Create New Post</h3>
+                    <form id="create-post-form" enctype="multipart/form-data">
+                        <div class="form-group">
+                            <label>Content</label>
+                            <textarea id="post-content" class="form-control" rows="4" placeholder="What's on your mind?"></textarea>
                         </div>
-                        <form id="create-post-form" enctype="multipart/form-data">
-                            <div class="form-group">
-                                <label>Content</label>
-                                <textarea id="post-content" placeholder="What's on your mind?"></textarea>
-                            </div>
-                            <div class="form-group">
-                                <label>Image</label>
-                                <input type="file" id="post-image" accept="image/*">
-                                <div id="image-preview" class="image-preview hidden"></div>
-                            </div>
-                            <div class="form-group">
-                                <label>Caption</label>
-                                <input type="text" id="post-caption" placeholder="Add a caption...">
-                            </div>
-                            <div class="form-actions">
-                                <button type="button" class="btn btn-secondary" id="cancel-post">Cancel</button>
-                                <button type="submit" class="btn btn-primary">Share Post</button>
-                            </div>
-                        </form>
-                    </div>
+                        <div class="form-group">
+                            <label>Image</label>
+                            <input type="file" id="post-image" class="form-control" accept="image/*">
+                            <div id="image-preview" class="image-preview" style="display:none; margin-top:0.5rem;"></div>
+                        </div>
+                        <div class="form-group">
+                            <label>Caption</label>
+                            <input type="text" id="post-caption" class="form-control" placeholder="Add a caption...">
+                        </div>
+                        <div style="display: flex; gap: 1rem; justify-content: flex-end;">
+                            <button type="button" class="btn btn-ghost" id="cancel-post">Cancel</button>
+                            <button type="submit" class="btn btn-primary">Share Post</button>
+                        </div>
+                    </form>
                 </div>
+            </div>
 
-                <div id="posts-feed" class="posts-feed">
-                    <div id="posts-loading" class="loading hidden">Loading posts...</div>
-                    <div id="posts-container"></div>
-                    <button id="load-more-posts" class="btn btn-outline hidden">Load More</button>
+            <div id="posts-feed">
+                <div id="posts-loading" style="display:none; text-align:center; padding:2rem;">
+                    <i class="fas fa-spinner fa-spin"></i> Loading posts...
                 </div>
+                <div id="posts-container"></div>
+                <button id="load-more-posts" class="btn btn-outline" style="width:100%; margin-top:1rem; display:none;">Load More</button>
             </div>
         `;
 
-        const mount = document.getElementById('postsHost') || document.querySelector('#chat .main-panel') || document.querySelector('.main-panel') || document.body;
-        mount.insertAdjacentHTML('beforeend', postsHTML);
-        this.bindPostsEvents();
+        const mount = document.getElementById('postsHost');
+        if (mount) {
+            mount.innerHTML = postsHTML;
+            this.bindPostsEvents();
+            // Auto-load feed when posts section is active
+            setTimeout(() => this.loadFeed(1), 500);
+        }
     }
 
     bindPostsEvents() {
         // Create post modal
-        document.getElementById('create-post-btn').addEventListener('click', () => {
-            document.getElementById('create-post-modal').classList.remove('hidden');
-        });
+        const createBtn = document.getElementById('create-post-btn');
+        if (createBtn) {
+            createBtn.addEventListener('click', () => {
+                document.getElementById('create-post-modal').classList.add('active');
+            });
+        }
 
         // Close modal
-        document.querySelector('#create-post-modal .close').addEventListener('click', () => {
-            this.closeCreatePostModal();
-        });
-
-        document.getElementById('cancel-post').addEventListener('click', () => {
-            this.closeCreatePostModal();
-        });
+        const cancelBtn = document.getElementById('cancel-post');
+        if (cancelBtn) {
+            cancelBtn.addEventListener('click', () => {
+                this.closeCreatePostModal();
+            });
+        }
 
         // Image preview
         document.getElementById('post-image').addEventListener('change', (e) => {
@@ -121,10 +126,12 @@ class PostsManager {
         if (imageFile) formData.append('image', imageFile);
 
         try {
-            const response = await fetch(`${typeof API_BASE!== 'undefined' ? API_BASE : ''}/posts/create`, {
+            const API_BASE = window.API_BASE || 'https://google-8j5x.onrender.com/api';
+            const token = localStorage.getItem('authToken') || window.authToken;
+            const response = await fetch(`${API_BASE}/posts/create`, {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Bearer ${typeof authToken !== 'undefined' ? authToken : (localStorage.getItem('authToken') || '')}`
+                    'Authorization': `Bearer ${token}`
                 },
                 body: formData
             });
@@ -143,19 +150,21 @@ class PostsManager {
     }
 
     closeCreatePostModal() {
-        document.getElementById('create-post-modal').classList.add('hidden');
+        document.getElementById('create-post-modal').classList.remove('active');
         document.getElementById('create-post-form').reset();
-        document.getElementById('image-preview').classList.add('hidden');
+        document.getElementById('image-preview').style.display = 'none';
     }
 
     async loadFeed(page = 1) {
-        document.getElementById('posts-loading').classList.remove('hidden');
+        const loadingEl = document.getElementById('posts-loading');
+        if (loadingEl) loadingEl.style.display = 'block';
         
         try {
-            const base = (typeof API_BASE!== 'undefined' ? API_BASE : '/api');
-            const response = await fetch(`${base}/posts/feed?page=${page}&limit=${this.postsPerPage}`, {
+            const API_BASE = window.API_BASE || 'https://google-8j5x.onrender.com/api';
+            const token = localStorage.getItem('authToken') || window.authToken;
+            const response = await fetch(`${API_BASE}/posts/feed?page=${page}&limit=${this.postsPerPage}`, {
                 headers: {
-                    'Authorization': `Bearer ${typeof authToken !== 'undefined' ? authToken : (localStorage.getItem('authToken') || '')}`
+                    'Authorization': `Bearer ${token}`
                 }
             });
 
@@ -180,7 +189,7 @@ class PostsManager {
         } catch (error) {
             showNotification('Error loading posts', 'error');
         } finally {
-            document.getElementById('posts-loading').classList.add('hidden');
+            if (loadingEl) loadingEl.style.display = 'none';
         }
     }
 
@@ -261,11 +270,12 @@ class PostsManager {
 
     async toggleLike(postId) {
         try {
-            const base = (typeof API_BASE!== 'undefined' ? API_BASE : '/api');
-            const response = await fetch(`${base}/posts/${postId}/like`, {
+            const API_BASE = window.API_BASE || 'https://google-8j5x.onrender.com/api';
+            const token = localStorage.getItem('authToken') || window.authToken;
+            const response = await fetch(`${API_BASE}/posts/${postId}/like`, {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Bearer ${typeof authToken !== 'undefined' ? authToken : (localStorage.getItem('authToken') || '')}`
+                    'Authorization': `Bearer ${token}`
                 }
             });
 
@@ -294,12 +304,13 @@ class PostsManager {
         if (!content) return;
 
         try {
-            const base = (typeof API_BASE!== 'undefined' ? API_BASE : '/api');
-            const response = await fetch(`${base}/posts/${postId}/comment`, {
+            const API_BASE = window.API_BASE || 'https://google-8j5x.onrender.com/api';
+            const token = localStorage.getItem('authToken') || window.authToken;
+            const response = await fetch(`${API_BASE}/posts/${postId}/comment`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${typeof authToken !== 'undefined' ? authToken : (localStorage.getItem('authToken') || '')}`
+                    'Authorization': `Bearer ${token}`
                 },
                 body: JSON.stringify({ content })
             });

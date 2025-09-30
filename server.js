@@ -375,7 +375,11 @@ class IntrovertServer {
             this.users.set(userId, user);
 
             // Generate JWT
-            const token = jwt.sign({ userId }, this.JWT_SECRET, { expiresIn: '30d' });
+            const token = jwt.sign({ 
+                userId, 
+                username: user.username,
+                email: user.email 
+            }, this.JWT_SECRET, { expiresIn: '30d' });
 
             res.cookie('token', token, {
                 httpOnly: true,
@@ -431,7 +435,11 @@ class IntrovertServer {
             user.lastSeen = new Date();
 
             // Generate JWT
-            const token = jwt.sign({ userId: user.id }, this.JWT_SECRET, { expiresIn: '30d' });
+            const token = jwt.sign({ 
+                userId: user.id,
+                username: user.username,
+                email: user.email
+            }, this.JWT_SECRET, { expiresIn: '30d' });
 
             res.cookie('token', token, {
                 httpOnly: true,
@@ -761,8 +769,51 @@ class IntrovertServer {
             });
 
             socket.on('canvas_draw', (data) => {
-                socket.to(`canvas_${data.canvasId}`).emit('canvas_stroke', {
-                    stroke: data.stroke,
+                socket.to(data.roomId).emit('canvas_draw', {
+                    x: data.x,
+                    y: data.y,
+                    color: data.color,
+                    userId: socket.userId
+                });
+            });
+
+            socket.on('canvas_clear', (data) => {
+                socket.to(data.roomId).emit('canvas_clear', {
+                    userId: socket.userId
+                });
+            });
+
+            socket.on('watch_party_start', (data) => {
+                socket.to(data.roomId).emit('watch_party_start', {
+                    videoId: data.videoId,
+                    userId: socket.userId
+                });
+            });
+
+            // WebRTC Signaling
+            socket.on('call_offer', (data) => {
+                socket.to(data.roomId).emit('call_offer', {
+                    offer: data.offer,
+                    userId: socket.userId
+                });
+            });
+
+            socket.on('call_answer', (data) => {
+                socket.to(data.roomId).emit('call_answer', {
+                    answer: data.answer,
+                    userId: socket.userId
+                });
+            });
+
+            socket.on('ice_candidate', (data) => {
+                socket.to(data.roomId).emit('ice_candidate', {
+                    candidate: data.candidate,
+                    userId: socket.userId
+                });
+            });
+
+            socket.on('call_end', (data) => {
+                socket.to(data.roomId).emit('call_end', {
                     userId: socket.userId
                 });
             });
