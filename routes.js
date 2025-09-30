@@ -25,14 +25,19 @@ export class SocialRoutes {
 
     // 📝 Posts Management
     async createPost(req, res) {
-        try {
-            this.upload.single('image')(req, res, async (err) => {
+        this.upload.single('image')(req, res, async (err) => {
+            try {
                 if (err) {
+                    console.error('Upload error:', err);
                     return res.status(400).json({ success: false, error: err.message });
                 }
 
                 const { content, caption } = req.body;
                 const user = req.user;
+
+                if (!user) {
+                    return res.status(401).json({ success: false, error: 'User not authenticated' });
+                }
 
                 if (!content && !req.file) {
                     return res.status(400).json({ success: false, error: 'Post must have content or image' });
@@ -42,13 +47,19 @@ export class SocialRoutes {
                 let imageUrl = null;
 
                 if (req.file) {
-                    const processedImagePath = join(process.cwd(), 'uploads/posts', `processed-${req.file.filename}`);
-                    await sharp(req.file.path)
-                        .resize(800, 600, { fit: 'inside', withoutEnlargement: true })
-                        .jpeg({ quality: 85 })
-                        .toFile(processedImagePath);
-                    
-                    imageUrl = `/uploads/posts/processed-${req.file.filename}`;
+                    try {
+                        const processedImagePath = join(process.cwd(), 'uploads/posts', `processed-${req.file.filename}`);
+                        await sharp(req.file.path)
+                            .resize(800, 600, { fit: 'inside', withoutEnlargement: true })
+                            .jpeg({ quality: 85 })
+                            .toFile(processedImagePath);
+                        
+                        imageUrl = `/uploads/posts/processed-${req.file.filename}`;
+                    } catch (imageError) {
+                        console.error('Image processing error:', imageError);
+                        // Continue without image processing
+                        imageUrl = `/uploads/posts/${req.file.filename}`;
+                    }
                 }
 
                 const post = {
@@ -65,25 +76,36 @@ export class SocialRoutes {
                 };
 
                 this.posts.set(postId, post);
+                
+                if (!user.posts) user.posts = [];
+                if (!user.stats) user.stats = { postsCount: 0, followersCount: 0, followingCount: 0 };
+                
                 user.posts.push(postId);
                 user.stats.postsCount++;
 
-                // Notify followers
-                for (const followerId of user.followers) {
-                    this.createNotification(followerId, 'new_post', {
-                        userId: user.id,
-                        username: user.username,
-                        postId: postId,
-                        message: `${user.username} shared a new post`
-                    });
+                // Notify followers safely
+                if (user.followers && Array.isArray(user.followers)) {
+                    for (const followerId of user.followers) {
+                        try {
+                            this.createNotification(followerId, 'new_post', {
+                                userId: user.id,
+                                username: user.username,
+                                postId: postId,
+                                message: `${user.username} shared a new post`
+                            });
+                        } catch (notifError) {
+                            console.error('Notification error:', notifError);
+                        }
+                    }
                 }
 
+                console.log('Post created successfully:', postId);
                 res.json({ success: true, post });
-            });
-        } catch (error) {
-            this.server.logError('Error creating post:', error);
-            res.status(500).json({ success: false, error: 'Failed to create post' });
-        }
+            } catch (error) {
+                console.error('Error creating post:', error);
+                res.status(500).json({ success: false, error: 'Failed to create post: ' + error.message });
+            }
+        });
     }
 
     getFeed(req, res) {
