@@ -316,6 +316,24 @@
             font-size: 0.75rem;
         }
 
+        .btn-icon {
+            padding: 0.5rem;
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            border-radius: 50%;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .btn-icon:hover {
+            background: var(--bg-secondary);
+            color: var(--primary);
+        }
+
         .muted {
             color: var(--text-muted);
         }
@@ -329,6 +347,173 @@
             display: flex;
             gap: 0.5rem;
             flex-wrap: wrap;
+        }
+
+        /* Post Card Styles */
+        .post-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .post-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .post-user {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .user-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: var(--primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+        }
+
+        .user-info h4 {
+            margin: 0;
+            font-size: 0.95rem;
+        }
+
+        .post-time {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+
+        .post-content {
+            margin: 1rem 0;
+            line-height: 1.6;
+        }
+
+        .post-image {
+            margin: 1rem 0;
+            border-radius: var(--radius);
+            overflow: hidden;
+        }
+
+        .post-image img {
+            width: 100%;
+            height: auto;
+            display: block;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+
+        .post-image img:hover {
+            transform: scale(1.02);
+        }
+
+        .post-caption {
+            font-style: italic;
+            color: var(--text-secondary);
+            margin: 0.5rem 0;
+        }
+
+        .post-stats {
+            display: flex;
+            gap: 1rem;
+            padding: 0.75rem 0;
+            border-top: 1px solid var(--border);
+            border-bottom: 1px solid var(--border);
+            font-size: 0.9rem;
+            color: var(--text-muted);
+        }
+
+        .post-interactions {
+            display: flex;
+            gap: 0.5rem;
+            padding-top: 0.75rem;
+        }
+
+        .interaction-btn {
+            flex: 1;
+            padding: 0.5rem;
+            background: transparent;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+
+        .interaction-btn:hover {
+            background: var(--bg-secondary);
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+
+        .interaction-btn.active {
+            background: var(--primary);
+            border-color: var(--primary);
+            color: white;
+        }
+
+        .comments-section {
+            margin-top: 1rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .comments-section.hidden {
+            display: none;
+        }
+
+        .add-comment {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .add-comment input {
+            flex: 1;
+            padding: 0.5rem;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+        }
+
+        .comments-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        .comment {
+            padding: 0.75rem;
+            background: var(--bg-secondary);
+            border-radius: var(--radius);
+        }
+
+        .comment-user {
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+
+        .comment-content {
+            color: var(--text-secondary);
+        }
+
+        .comment-time {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 0.25rem;
         }
 
         .badge-item {

@@ -349,6 +349,74 @@ class PostsManager {
         commentsSection.classList.toggle('hidden');
     }
 
+    showPostOptions(postId) {
+        const post = this.posts.find(p => p.id === postId);
+        if (!post) return;
+        
+        const options = ['Delete Post', 'Report Post', 'Cancel'];
+        const choice = prompt(`Options for post:\n1. Delete Post\n2. Report Post\n3. Cancel\n\nEnter choice (1-3):`);
+        
+        if (choice === '1' && post.userId === window.currentUser?.id) {
+            this.deletePost(postId);
+        } else if (choice === '2') {
+            showNotification('Post reported', 'success');
+        }
+    }
+
+    async deletePost(postId) {
+        if (!confirm('Are you sure you want to delete this post?')) return;
+        
+        try {
+            const API_BASE = window.API_BASE || 'https://google-8j5x.onrender.com/api';
+            const token = localStorage.getItem('authToken') || window.authToken;
+            const response = await fetch(`${API_BASE}/posts/${postId}`, {
+                method: 'DELETE',
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+            const result = await response.json();
+            if (result.success) {
+                showNotification('Post deleted', 'success');
+                this.refreshFeed();
+            } else {
+                showNotification(result.error || 'Failed to delete post', 'error');
+            }
+        } catch (error) {
+            showNotification('Error deleting post', 'error');
+        }
+    }
+
+    sharePost(postId) {
+        const post = this.posts.find(p => p.id === postId);
+        if (!post) return;
+        
+        const shareText = `Check out this post by ${post.username}!`;
+        const shareUrl = `${window.location.origin}?post=${postId}`;
+        
+        if (navigator.share) {
+            navigator.share({
+                title: 'INTROVERT Post',
+                text: shareText,
+                url: shareUrl
+            }).catch(() => {
+                this.copyToClipboard(shareUrl);
+            });
+        } else {
+            this.copyToClipboard(shareUrl);
+        }
+    }
+
+    copyToClipboard(text) {
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(text).then(() => {
+                showNotification('Link copied to clipboard!', 'success');
+            });
+        } else {
+            showNotification('Share link: ' + text, 'info');
+        }
+    }
+
     updatePostStats(postId, post) {
         const postElement = document.querySelector(`[data-post-id="${postId}"]`);
         if (postElement) {
