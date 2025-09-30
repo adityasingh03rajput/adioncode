@@ -568,7 +568,7 @@
         .toast.error { background: var(--danger); }
         .toast.warning { background: var(--warning); color: black; }
 
-        @keyframes fadeIn {I
+        @keyframes fadeIn {
             from { opacity: 0; transform: translateY(-10px); }
             to { opacity: 1; transform: translateY(0); }
         }
@@ -1657,11 +1657,20 @@
             const message = input.value.trim();
 
             if (message && currentRoom && socket) {
-                socket.emit('send_message', {
+                const messageData = {
                     roomId: currentRoom,
                     content: message,
-                    type: 'text'
-                });
+                    type: 'text',
+                    senderId: currentUser?.id,
+                    senderUsername: currentUser?.username,
+                    timestamp: new Date()
+                };
+                
+                socket.emit('send_message', messageData);
+                
+                // Display own message immediately
+                displayMessage(messageData);
+                
                 input.value = '';
             }
         }

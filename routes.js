@@ -28,14 +28,14 @@ export class SocialRoutes {
         try {
             this.upload.single('image')(req, res, async (err) => {
                 if (err) {
-                    return res.status(400).json({ error: err.message });
+                    return res.status(400).json({ success: false, error: err.message });
                 }
 
                 const { content, caption } = req.body;
                 const user = req.user;
 
                 if (!content && !req.file) {
-                    return res.status(400).json({ error: 'Post must have content or image' });
+                    return res.status(400).json({ success: false, error: 'Post must have content or image' });
                 }
 
                 const postId = uuidv4();
@@ -82,7 +82,7 @@ export class SocialRoutes {
             });
         } catch (error) {
             this.server.logError('Error creating post:', error);
-            res.status(500).json({ error: 'Failed to create post' });
+            res.status(500).json({ success: false, error: 'Failed to create post' });
         }
     }
 
@@ -293,12 +293,12 @@ export class SocialRoutes {
         }
 
         if (!followRequest) {
-            return res.status(404).json({ error: 'Follow request not found' });
+            return res.status(404).json({ success: false, error: 'Follow request not found' });
         }
 
         const follower = this.users.get(userId);
         if (!follower) {
-            return res.status(404).json({ error: 'User not found' });
+            return res.status(404).json({ success: false, error: 'User not found' });
         }
 
         followRequest.status = 'accepted';
@@ -337,7 +337,7 @@ export class SocialRoutes {
         }
 
         if (!followRequestId) {
-            return res.status(404).json({ error: 'Follow request not found' });
+            return res.status(404).json({ success: false, error: 'Follow request not found' });
         }
 
         this.follows.delete(followRequestId);
@@ -451,11 +451,11 @@ export class SocialRoutes {
         try {
             this.upload.single('image')(req, res, async (err) => {
                 if (err) {
-                    return res.status(400).json({ error: err.message });
+                    return res.status(400).json({ success: false, error: err.message });
                 }
 
                 if (!req.file) {
-                    return res.status(400).json({ error: 'Image is required for face search' });
+                    return res.status(400).json({ success: false, error: 'Image is required for face search' });
                 }
 
                 const currentUser = req.user;
@@ -482,7 +482,7 @@ export class SocialRoutes {
             });
         } catch (error) {
             this.server.logError('Error in face search:', error);
-            res.status(500).json({ error: 'Face search failed' });
+            res.status(500).json({ success: false, error: 'Face search failed' });
         }
     }
 
