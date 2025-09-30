@@ -444,6 +444,11 @@ class IntrovertServer {
         });
     }
 
+    sanitize(text) {
+        if (!text) return '';
+        return text.toString().trim().replace(/<[^>]*>/g, '');
+    }
+
     sanitizeUser(user) {
         return {
             id: user.id,
@@ -458,6 +463,14 @@ class IntrovertServer {
             badges: user.badges,
             stats: user.stats
         };
+    }
+
+    logError(message, error) {
+        console.error(`❌ ${message}`, error);
+    }
+
+    logSuccess(message, data = {}) {
+        console.log(`✅ ${message}`, data);
     }
 
     initializeSocketHandlers() {

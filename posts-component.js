@@ -245,7 +245,7 @@ class PostsManager {
             </div>
             
             <div class="post-interactions">
-                <button class="interaction-btn ${post.likes && currentUser && post.likes.includes(currentUser?.id) ? 'active' : ''}" 
+                <button class="interaction-btn ${post.likes && window.currentUser && post.likes.includes(window.currentUser?.id) ? 'active' : ''}" 
                         onclick="postsManager.toggleLike('${post.id}')">
                     <i class="fas fa-heart"></i> Like
                 </button>
@@ -283,11 +283,11 @@ class PostsManager {
             if (result.success) {
                 // Update UI
                 const post = this.posts.find(p => p.id === postId);
-                if (post) {
+                if (post && window.currentUser) {
                     if (result.liked) {
-                        post.likes.push(currentUser.id);
+                        post.likes.push(window.currentUser.id);
                     } else {
-                        post.likes = post.likes.filter(id => id !== currentUser.id);
+                        post.likes = post.likes.filter(id => id !== window.currentUser.id);
                     }
                     this.updatePostStats(postId, post);
                 }

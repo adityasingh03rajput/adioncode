@@ -575,6 +575,47 @@
                 font-size: 2.5rem;
             }
         }
+
+        /* Animations */
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        @keyframes slideOut {
+            from {
+                transform: translateX(0);
+                opacity: 1;
+            }
+            to {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+            }
+            to {
+                opacity: 1;
+            }
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
+        }
     </style>
 </head>
 
@@ -1030,11 +1071,42 @@
         let currentRoom = null;
         let authToken = null;
 
+        // Make available globally for components
+        window.currentUser = null;
+        window.authToken = null;
+        window.API_BASE = 'https://google-8j5x.onrender.com/api';
+
         // Server configuration - Production only
         const SERVER_URL = 'https://google-8j5x.onrender.com';
         const API_BASE = `${SERVER_URL}/api`;
 
         console.log('🌍 Using PRODUCTION server:', SERVER_URL);
+
+        // Global notification function
+        window.showNotification = function(message, type = 'info') {
+            const notification = document.createElement('div');
+            notification.className = 'toast-notification';
+            notification.style.cssText = `
+                position: fixed;
+                top: 80px;
+                right: 20px;
+                padding: 1rem 1.5rem;
+                border-radius: 0.5rem;
+                color: white;
+                font-weight: 500;
+                z-index: 10000;
+                animation: slideIn 0.3s ease-out;
+                background: ${type === 'success' ? '#10b981' : type === 'error' ? '#ef4444' : '#3b82f6'};
+                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            `;
+            notification.textContent = message;
+            document.body.appendChild(notification);
+            
+            setTimeout(() => {
+                notification.style.animation = 'slideOut 0.3s ease-out';
+                setTimeout(() => notification.remove(), 300);
+            }, 3000);
+        };
 
         // Initialize app
         document.addEventListener('DOMContentLoaded', async function () {
@@ -1051,12 +1123,15 @@
                 try {
                     const payload = JSON.parse(atob(authToken.split('.')[1]));
                     currentUser = { id: payload.userId, username: payload.username || 'User' };
+                    window.currentUser = currentUser;
+                    window.authToken = authToken;
                     updateAuthUI();
                     connectSocket();
                 } catch (e) {
                     // Invalid token, clear it
                     localStorage.removeItem('authToken');
                     authToken = null;
+                    window.authToken = null;
                 }
             }
             updateAuthUI();
@@ -1187,11 +1262,21 @@
 
             // WebRTC signaling
             socket.on('call_offer', async (data) => {
-                if (peerConnection) {
-                    await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
-                    const answer = await peerConnection.createAnswer();
-                    await peerConnection.setLocalDescription(answer);
-                    socket.emit('call_answer', { roomId: currentRoom, answer });
+                try {
+                    // Initialize peer connection if not exists
+                    if (!peerConnection) {
+                        await initializeCall(true);
+                    }
+                    
+                    if (peerConnection) {
+                        await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+                        const answer = await peerConnection.createAnswer();
+                        await peerConnection.setLocalDescription(answer);
+                        socket.emit('call_answer', { roomId: currentRoom, answer });
+                        showNotification('Incoming call...', 'info');
+                    }
+                } catch (error) {
+                    console.error('Error handling call offer:', error);
                 }
             });
 
@@ -1277,17 +1362,20 @@
                     if (data.success) {
                         authToken = data.token;
                         currentUser = data.user;
+                        window.currentUser = currentUser;
+                        window.authToken = authToken;
                         localStorage.setItem('authToken', authToken);
                         hideModal('loginModal');
                         updateAuthUI();
                         showPage('chat');
                         connectSocket();
                         enableChatInterface();
+                        showNotification('Login successful!', 'success');
                     } else {
-                        alert(data.error || 'Login failed');
+                        showNotification(data.error || 'Login failed', 'error');
                     }
                 } catch (error) {
-                    alert('Login failed: ' + error.message);
+                    showNotification('Login failed: ' + error.message, 'error');
                 }
             });
 
@@ -1317,17 +1405,20 @@
                     if (data.success) {
                         authToken = data.token;
                         currentUser = data.user;
+                        window.currentUser = currentUser;
+                        window.authToken = authToken;
                         localStorage.setItem('authToken', authToken);
                         hideModal('registerModal');
                         updateAuthUI();
                         showPage('chat');
                         connectSocket();
                         enableChatInterface();
+                        showNotification('Registration successful!', 'success');
                     } else {
-                        alert(data.error || 'Registration failed');
+                        showNotification(data.error || 'Registration failed', 'error');
                     }
                 } catch (error) {
-                    alert('Registration failed: ' + error.message);
+                    showNotification('Registration failed: ' + error.message, 'error');
                 }
             });
         }
@@ -1360,6 +1451,20 @@
             // Load initial data
             loadNotifications();
             loadProfile();
+        }
+
+        function enableCallButtons() {
+            const videoBtn = document.getElementById('videoCallBtn');
+            const voiceBtn = document.getElementById('voiceCallBtn');
+            if (videoBtn) videoBtn.disabled = false;
+            if (voiceBtn) voiceBtn.disabled = false;
+        }
+
+        function disableCallButtons() {
+            const videoBtn = document.getElementById('videoCallBtn');
+            const voiceBtn = document.getElementById('voiceCallBtn');
+            if (videoBtn) videoBtn.disabled = true;
+            if (voiceBtn) voiceBtn.disabled = true;
         }
 
         function sendMessage() {
@@ -1417,12 +1522,14 @@
                     socket.emit('join_room', currentRoom);
                     document.getElementById('chatTitle').textContent = `Chatting with ${data.match.username}`;
                     document.getElementById('chatStatus').textContent = 'Connected';
+                    enableCallButtons();
                     showPage('chat');
+                    showNotification('Match found!', 'success');
                 } else {
-                    alert(data.message || 'No matches found');
+                    showNotification(data.message || 'No matches found', 'error');
                 }
             } catch (error) {
-                alert('Failed to find match: ' + error.message);
+                showNotification('Failed to find match: ' + error.message, 'error');
             }
         }
 
@@ -1553,12 +1660,13 @@
                     socket.emit('join_room', currentRoom);
                     document.getElementById('chatTitle').textContent = `Room: ${roomName}`;
                     document.getElementById('chatStatus').textContent = 'Room created';
-                    alert('Room created successfully!');
+                    enableCallButtons();
+                    showNotification('Room created successfully!', 'success');
                 } else {
-                    alert(data.error || 'Failed to create room');
+                    showNotification(data.error || 'Failed to create room', 'error');
                 }
             } catch (error) {
-                alert('Error creating room');
+                showNotification('Error creating room', 'error');
             }
         }
 
@@ -1566,7 +1674,7 @@
         let currentVideoId = null;
         function startWatchParty() {
             if (!currentRoom) {
-                alert('Join a room first to start a watch party');
+                showNotification('Join a room first to start a watch party', 'info');
                 return;
             }
             showModal('watchPartyModal');
@@ -1576,7 +1684,7 @@
             const url = document.getElementById('videoUrl').value;
             const videoId = extractYouTubeId(url);
             if (!videoId) {
-                alert('Invalid YouTube URL');
+                showNotification('Invalid YouTube URL', 'error');
                 return;
             }
             currentVideoId = videoId;
@@ -1598,7 +1706,7 @@
         let canvas, ctx, isDrawing = false, currentColor = 'black';
         function openCanvas() {
             if (!currentRoom) {
-                alert('Join a room first to use collaborative canvas');
+                showNotification('Join a room first to use collaborative canvas', 'info');
                 return;
             }
             showModal('canvasModal');
@@ -1656,7 +1764,7 @@
         async function translateLastMessage() {
             const messages = document.querySelectorAll('.message');
             if (messages.length === 0) {
-                alert('No messages to translate');
+                showNotification('No messages to translate', 'info');
                 return;
             }
             const lastMessage = messages[messages.length - 1];
@@ -1687,10 +1795,10 @@
                 if (data.success) {
                     document.getElementById('translatedText').value = data.translatedText;
                 } else {
-                    alert('Translation failed');
+                    showNotification('Translation failed', 'error');
                 }
             } catch (error) {
-                alert('Error translating message');
+                showNotification('Error translating message', 'error');
             }
         }
 
@@ -1703,7 +1811,7 @@
 
         async function startVideoCall() {
             if (!currentRoom) {
-                alert('Join a room first to start a video call');
+                showNotification('Join a room first to start a video call', 'info');
                 return;
             }
             showModal('videoCallModal');
@@ -1712,7 +1820,7 @@
 
         async function startVoiceCall() {
             if (!currentRoom) {
-                alert('Join a room first to start a voice call');
+                showNotification('Join a room first to start a voice call', 'info');
                 return;
             }
             showModal('videoCallModal');
@@ -1767,7 +1875,7 @@
                 }
             } catch (error) {
                 console.error('Error starting call:', error);
-                alert('Failed to access camera/microphone');
+                showNotification('Failed to access camera/microphone', 'error');
             }
         }
 
@@ -1815,12 +1923,15 @@
             authToken = null;
             currentUser = null;
             currentRoom = null;
+            window.currentUser = null;
+            window.authToken = null;
             if (socket) {
                 socket.disconnect();
                 socket = null;
             }
             updateAuthUI();
             showPage('home');
+            showNotification('Logged out successfully', 'info');
         }
 
         // Notifications
@@ -1924,13 +2035,13 @@
                 });
                 const data = await response.json();
                 if (data.success) {
-                    alert('Profile updated successfully');
+                    showNotification('Profile updated successfully', 'success');
                     loadProfile();
                 } else {
-                    alert(data.error || 'Failed to update profile');
+                    showNotification(data.error || 'Failed to update profile', 'error');
                 }
             } catch (error) {
-                alert('Error updating profile');
+                showNotification('Error updating profile', 'error');
             }
         });
 
@@ -1941,7 +2052,7 @@
             const fileInput = document.getElementById('profilePictureInput');
             const file = fileInput.files[0];
             if (!file) {
-                alert('Please select a file');
+                showNotification('Please select a file', 'error');
                 return;
             }
             const formData = new FormData();
@@ -1954,13 +2065,13 @@
                 });
                 const data = await response.json();
                 if (data.success) {
-                    alert('Profile picture updated successfully');
+                    showNotification('Profile picture updated successfully', 'success');
                     loadProfile();
                 } else {
-                    alert(data.error || 'Failed to update profile picture');
+                    showNotification(data.error || 'Failed to update profile picture', 'error');
                 }
             } catch (error) {
-                alert('Error updating profile picture');
+                showNotification('Error updating profile picture', 'error');
             }
         });
 
@@ -2007,6 +2118,7 @@
         function startChatWithMatch(roomId) {
             currentRoom = roomId;
             socket.emit('join_room', roomId);
+            enableCallButtons();
             document.querySelector('[data-target="chatSection"]').click();
         }
 
