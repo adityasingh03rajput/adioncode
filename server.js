@@ -237,7 +237,7 @@ class IntrovertServer {
 
         // Social features
         this.app.post('/api/social/find-match', this.authenticateToken, this.findRandomMatch.bind(this));
-        this.app.post('/api/social/find-match-enhanced', this.authenticateToken, this.socialRoutes.findMatchEnhanced.bind(this.socialRoutes));
+        this.app.post('/api/social/find-match-enhanced', this.authenticateToken, this.socialRoutes.findRandomMatchEnhanced.bind(this.socialRoutes));
         this.app.post('/api/social/create-room', this.authenticateToken, this.createChatRoom.bind(this));
 
         // AI features
